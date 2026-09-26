@@ -5,9 +5,13 @@ import { DataSource } from 'typeorm';
 
 /**
  * Maximum milliseconds to wait for a pool connection before reporting the
- * pool as exhausted. Matches the acquireTimeoutMillis set in database.config.ts
- * so that the health endpoint reliably detects pool exhaustion without
- * introducing an independent, stale timeout value.
+ * pool as exhausted. Matches the connectionTimeoutMillis set in
+ * database.config.ts (issue #516; previously misspelled there as
+ * acquireTimeoutMillis, which pg-pool silently ignored) so the health
+ * endpoint reliably detects pool exhaustion without introducing an
+ * independent, stale timeout value. With that option now correctly named,
+ * pg-pool itself also drops a queued request after this many ms instead of
+ * leaving it queued indefinitely once this race gives up on it.
  */
 const DB_HEALTH_TIMEOUT_MS = 3_000;
 

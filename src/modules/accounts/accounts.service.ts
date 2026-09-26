@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Account } from './entities/account.entity.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
 import { AccountResponseDto } from './dto/account-response.dto.js';
@@ -221,7 +221,12 @@ export class AccountsService {
   }
 
   public async findOne(id: string): Promise<AccountResponseDto> {
-    const account = await this.accountsRepository.findOne({ where: { id } });
+    // Soft-deleted accounts are excluded so GET /accounts/:id 404s for them,
+    // matching findAll(). Verified for #698 (duplicate of the already-resolved
+    // #637, fixed in PR #771).
+    const account = await this.accountsRepository.findOne({
+      where: { id, deletedAt: IsNull() },
+    });
 
     if (!account) {
       throw new NotFoundException(`Account ${id} not found`);
@@ -290,7 +295,7 @@ export class AccountsService {
     // Integration notes:
     // - `CLAIM_BASE_URL` is an environment-level integration point. External
     //   systems and email templates may rely on the shape of this URL.
-    const baseUrl = process.env.CLAIM_BASE_URL || 'https://claim.bridgelet.io';
+    const baseUrl = this.configService.getOrThrow<string>('app.claimBaseUrl');
     return `${baseUrl}/c/${token}`;
   }
 

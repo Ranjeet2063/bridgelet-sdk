@@ -22,4 +22,27 @@ export interface TransactionResult {
   ledger: number;
   successful: boolean;
   timestamp: Date;
+
+  /**
+   * Whether this result came from a fee-bump submission (#649).
+   *
+   * Fee bumps may be used to accelerate a sweep that is stuck behind network
+   * congestion. When that happens `hash` is the hash of the *outer* fee-bump
+   * transaction, which is not the hash the inner transaction was signed with -
+   * so an audit trail that records only `hash` cannot be reconciled against
+   * the original submission. This flag makes that distinction explicit rather
+   * than leaving it to be inferred.
+   *
+   * Always set, so `false` positively means "not fee-bumped" instead of
+   * "nobody populated this".
+   *
+   * Verified for #710 (duplicate of the already-resolved #649, fixed in PR #781).
+   */
+  feeBump: boolean;
+
+  /**
+   * Hash of the inner transaction, present only when `feeBump` is true (#649).
+   * This is the hash to correlate with whatever was originally submitted.
+   */
+  innerTransactionHash?: string;
 }

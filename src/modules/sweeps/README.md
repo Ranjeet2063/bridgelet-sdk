@@ -1,3 +1,79 @@
+# Sweeps Module
+
+Moves funds out of an ephemeral account into a destination account, gated by an
+on-chain authorization from the `SweepController` Soroban contract.
+
+## Sweep Flow
+
+This is the authoritative description of the flow. It previously existed only as
+a comment on `SweepsService.executeSweep`, so it had to be reverse-engineered
+from code (#651).
+
+> Verified for #712 (duplicate of the already-resolved #651, fixed in PR #778).
+
+The order of operations is strict and intentional:
+
+1. **Validate** - `ValidationProvider.validateSweepParameters()` checks the
+   request before anything touches the network.
+2. **Authorize (sign)** - `ContractProvider.generateAuthSignature()` signs the
+   destination and the contract nonce with the sweep signing key.
+3. **Authorize (submit)** - `SweepController.execute_sweep()` is invoked on
+   Soroban, moving the contract into `Swept` state.
+4. **Transfer** - `TransactionProvider.executeSweepTransaction()` submits a
+   classic payment to Horizon, actually moving the funds.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant S as SweepsService
+    participant V as ValidationProvider
+    participant K as ContractProvider
+    participant T as TransactionProvider
+    participant SR as Soroban RPC
+    participant H as Horizon
+
+    C->>S: executeSweep(request)
+
+    S->>V: 1. validateSweepParameters(request)
+    V-->>S: ok (throws otherwise)
+
+    S->>K: 2. generateAuthSignature(destination, nonce)
+    K-->>S: signature
+
+    S->>K: 3. SweepController.execute_sweep()
+    K->>SR: simulate + submit
+    SR-->>K: auth result
+    K-->>S: contractAuthHash
+
+    Note over S,H: Past this point the contract is in Swept state.
+
+    S->>T: 4. executeSweepTransaction(params)
+    T->>H: submit payment
+    H-->>T: hash, ledger, successful
+    T-->>S: TransactionResult
+
+    S-->>C: SweepResult
+```
+
+### Failure between steps 3 and 4
+
+If step 3 succeeds and step 4 fails, the contract is in `Swept` state but **no
+funds have moved**. This is logged as a critical error for manual recovery and
+is deliberately **not** retried automatically - re-invoking `execute_sweep()`
+would revert on-chain.
+
+The retry path is driven by the orchestrator (`ClaimRedemptionProvider`), which
+re-enters with `skipContractAuth: true`. `SweepsService` then synthesises the
+auth hash deterministically from the same inputs, so the audit trail is
+preserved without touching the contract again.
+
+### Reclaiming the base reserve
+
+The flow above is payment-only, so the ephemeral account's base reserve stays
+locked up. `TransactionProvider.mergeAccount()` implements the alternative
+`AccountMerge` strategy that also reclaims the reserve, but `SweepsService`
+never calls it - treat it as available but not wired into the live flow.
+
 ## Usage
 
 ### Execute a Sweep
@@ -83,7 +159,7 @@ npm run test:cov -- sweeps
 1. Create funded ephemeral account on testnet
 2. Execute sweep with valid parameters:
 
-````bash
+```bash
 curl -X POST http://localhost:3000/api/sweeps \
   -H "Content-Type: application/json" \
   -d '{
@@ -94,6 +170,8 @@ curl -X POST http://localhost:3000/api/sweeps \
     "amount": "100",
     "asset": "native"
     }'
+```
+
 3. Verify transaction on Stellar Explorer
 4. Check destination account received funds
 5. Verify ephemeral account merged (if successful)
@@ -101,6 +179,7 @@ curl -X POST http://localhost:3000/api/sweeps \
 ## Configuration
 
 ### Required Environment Variables
+
 ```env
 # Stellar Network
 STELLAR_NETWORK=testnet
@@ -109,7 +188,7 @@ STELLAR_SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 
 # Smart Contract
 EPHEMERAL_ACCOUNT_CONTRACT_ID=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-````
+```
 
 ### Network Selection
 

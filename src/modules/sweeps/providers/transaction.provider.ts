@@ -17,6 +17,21 @@ import type { ExecuteTransactionParams } from '../interfaces/execute-transaction
 import type { TransactionResult } from '../interfaces/transaction-result.interface.js';
 import type { MergeAccountParams } from '../interfaces/merge-account-params.interface.js';
 
+/**
+ * Fee-bump metadata Horizon returns on a submission.
+ *
+ * The SDK declares these fields on the wider `TransactionResponse` but not on
+ * `SubmitTransactionResponse`, which is what `submitTransaction()` is typed to
+ * return - even though Horizon includes them in the submission response for a
+ * fee-bumped transaction. Narrowed here so the values can be read without
+ * casting to `any`. This is the same SDK-versus-wire gap already documented
+ * for `ledger` in transaction-result.interface.ts (#649).
+ */
+interface FeeBumpSubmitFields {
+  fee_bump_transaction?: { hash: string };
+  inner_transaction?: { hash: string };
+}
+
 interface HorizonErrorResponse {
   response?: {
     data?: {
@@ -90,16 +105,14 @@ export class TransactionProvider {
 
       this.logger.log(`Sweep transaction successful: ${result.hash}`);
 
-      const ledger = Number(result.ledger);
+      const ledger = this.toLedgerNumber(result.ledger);
 
-      if (Number.isNaN(ledger)) {
-        throw new Error(`Invalid ledger value: ${result.ledger}`);
-      }
       return {
         hash: result.hash,
         ledger: ledger,
         successful: result.successful,
         timestamp: new Date(),
+        ...this.describeFeeBump(result),
       };
     } catch (error) {
       const typedError = error as HorizonErrorResponse;
@@ -162,9 +175,10 @@ export class TransactionProvider {
 
       return {
         hash: result.hash,
-        ledger: result.ledger,
+        ledger: this.toLedgerNumber(result.ledger),
         successful: result.successful,
         timestamp: new Date(),
+        ...this.describeFeeBump(result),
       };
     } catch (error) {
       // Account merge can fail if account still has offers or trustlines
@@ -176,6 +190,46 @@ export class TransactionProvider {
 
       throw error; // Re-throw so caller can handle
     }
+  }
+
+  /**
+   * Coerce Horizon's `ledger` to a number (#647).
+   *
+   * transaction-result.interface.ts documents that the wire value can be a
+   * string even though the SDK types it as `number`. Both submission paths go
+   * through this helper so they cannot drift apart again - mergeAccount
+   * previously returned `result.ledger` unconverted, so a string ledger would
+   * reach consumers typed as a number.
+   */
+  private toLedgerNumber(rawLedger: number | string): number {
+    const ledger = Number(rawLedger);
+
+    if (Number.isNaN(ledger)) {
+      throw new Error(`Invalid ledger value: ${rawLedger}`);
+    }
+
+    return ledger;
+  }
+
+  /**
+   * Derive the fee-bump audit fields from a Horizon submission response (#649).
+   *
+   * Returns `feeBump: false` when Horizon reports no fee-bump envelope, so the
+   * field is always populated rather than merely absent.
+   */
+  private describeFeeBump(
+    result: Horizon.HorizonApi.SubmitTransactionResponse,
+  ): {
+    feeBump: boolean;
+    innerTransactionHash?: string;
+  } {
+    const feeBumpFields = result as FeeBumpSubmitFields;
+    const innerTransactionHash = feeBumpFields.inner_transaction?.hash;
+
+    return {
+      feeBump: Boolean(feeBumpFields.fee_bump_transaction),
+      ...(innerTransactionHash !== undefined ? { innerTransactionHash } : {}),
+    };
   }
 
   /**

@@ -23,10 +23,20 @@ describe('JwtAuthGuard', () => {
   });
 
   it('allows request with a valid Bearer token', async () => {
-    jwtService.verifyAsync.mockResolvedValueOnce({ sub: '1' });
+    jwtService.verifyAsync.mockResolvedValueOnce({ sub: '1', type: 'api' });
     await expect(
       guard.canActivate(mockExecutionContext('Bearer valid.token')),
     ).resolves.toBe(true);
+  });
+
+  it('rejects a claim token on an API route', async () => {
+    jwtService.verifyAsync.mockResolvedValueOnce({
+      publicKey: 'GABC',
+      type: 'claim',
+    });
+    await expect(
+      guard.canActivate(mockExecutionContext('Bearer claim.token')),
+    ).rejects.toThrow(UnauthorizedException);
   });
 
   it('throws 401 when Authorization header is missing', async () => {

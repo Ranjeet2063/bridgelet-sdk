@@ -6,16 +6,26 @@ import { fileURLToPath } from 'url';
 import 'dotenv/config';
 
 /**
- * Connection pool rationale
- * ─────────────────────────
- * • min: 2  – Keeps two warm connections ready so the first request after an
- *             idle period avoids the TCP + TLS + PostgreSQL auth round-trips.
+ * Connection pool rationale (issue #516)
+ * ───────────────────────────────────────
  * • max: 10 – Caps each NestJS instance to 10 connections. This leaves room
- *             for other services sharing the same PostgreSQL server and aligns
- *             with a conservative PgBouncer transaction-mode default.
- * • acquireTimeoutMillis: 3000 – Fail-fast policy: surface an error after 3 s
- *             rather than queuing requests silently, which would mask
- *             connection-leaks or an under-provisioned database.
+ *             for other services sharing the same PostgreSQL server. See
+ *             docs/deployment.md for sizing guidance against expected
+ *             concurrent load and multiple app instances.
+ * • min: 2  – node-postgres's `min` does NOT eagerly open connections at
+ *             startup; it only stops the pool closing idle connections below
+ *             this floor once they exist (see `_isAboveMin` in pg-pool). It
+ *             does not remove first-request connection latency on its own.
+ * • connectionTimeoutMillis: 3000 – This is the real node-postgres option
+ *             (previously misspelled here as `acquireTimeoutMillis`, which
+ *             pg-pool silently ignores as an unknown key). It governs BOTH
+ *             the time allowed to establish a brand-new physical connection
+ *             AND, critically, how long a caller queues for an already-open
+ *             connection when the pool is fully saturated. Without it set,
+ *             pool exhaustion queued callers indefinitely with no error – a
+ *             silent hang rather than clear backpressure. With it set, a
+ *             caller that can't get a connection within 3s now fails fast
+ *             with "timeout exceeded when trying to connect".
  *
  * The `extra` key is passed verbatim to the underlying `pg` Pool constructor,
  * which is how TypeORM exposes driver-specific pool configuration for Postgres.
@@ -23,7 +33,7 @@ import 'dotenv/config';
 const POOL_CONFIG = {
   min: 2,
   max: 10,
-  acquireTimeoutMillis: 3000,
+  connectionTimeoutMillis: 3000,
 } as const;
 
 export default registerAs(

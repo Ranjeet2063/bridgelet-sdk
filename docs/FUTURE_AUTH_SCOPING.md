@@ -1,5 +1,10 @@
 # Future Feature: Per-Integrator Auth Scoping
 
+> **Placement (issue #697):** this is forward-looking architecture, not
+> module-local documentation, so it lives here in `docs/` rather than inside
+> `src/modules/accounts/`. Track implementation of the design below as its
+> own issue when work on it starts.
+
 **Status:** Not implemented. Current `JwtAuthGuard` only verifies signature validity -
 any validly-signed JWT gets full access to every account in the system via
 `GET /accounts` and `POST /accounts`. Fine for a single internal caller;

@@ -4,7 +4,6 @@
 
 **MVP Stubs**
 
-> 🚧 **MVP — Active Development:** encryptSecret() — base64, not real encryption, must be replaced before any production deployment
 > 🚧 **The expiresIn → expiry_ledger conversion** — needs verification or explicit documentation of where it happens
 > 🚧 **Webhook coverage gaps**
 
@@ -36,18 +35,12 @@ The following services/imports are currently **commented out** to allow `npm run
 
 1. Search the codebase for comments containing `TEMPORARY:` to locate all commented-out code that needs restoration..
 
-2. **Secret Encryption** (`src/modules/accounts/accounts.service.ts`)
-   - **Current:** Base64 encoding (NOT encryption)
-   - **Impact:** Ephemeral secret keys are not protected at rest
-   - **Required:** AES-256-GCM or KMS-backed encryption before any deployment
-     with real funds
-
-3. **Ledger Expiry Conversion**
+2. **Ledger Expiry Conversion**
    - `CreateAccountDto.expiresIn` (seconds) is not yet converted to
      `expiry_ledger` (u32 ledger sequence) required by the contract
    - `expiresAt` Date is currently unused in `StellarService`
    - Conversion formula: `current_ledger + (expiresIn / 5)`
-4. **Sweep Authorization Signature** (`src/modules/sweeps/providers/contract.provider.ts`)
+3. **Sweep Authorization Signature** (`src/modules/sweeps/providers/contract.provider.ts`)
    - **Current:** `generateAuthSignature()` produces a fake 64-byte stub signature
    - **Works because:** `EphemeralAccount.verify_sweep_authorization()` in `bridgelet-core`
      is also a stub that accepts any signature (documented in bridgelet-core README)
@@ -61,6 +54,10 @@ The following services/imports are currently **commented out** to allow `npm run
 This is a **temporary stabilization** to enable local development and onboarding until missing implementations are complete. **No code was deleted** - all logic remains in place as comments.
 
 ---
+
+## Security
+
+Ephemeral Stellar secret keys are encrypted at rest with AES-256-GCM (KMS-backed envelope encryption in production). See [SECURITY.md](SECURITY.md) for the full encryption, key-management, and legacy-data-migration details.
 
 ## Tech Stack
 
@@ -139,7 +136,17 @@ npm run start:dev
 
 # Same, but skip the confirmation prompt (useful in CI)
 ./scripts/generate-migrations.sh --yes
+
+# Skip the prompt AND overwrite uncommitted changes in the migrations folder
+# (only needed when you deliberately want to discard hand-edited migrations)
+./scripts/generate-migrations.sh --yes --force
 ```
+
+Before deleting anything, the script runs a pre-flight `git status --porcelain` check
+against `src/database/migrations/` and aborts if it finds uncommitted changes there
+(modified, staged, or untracked files) — the rewrite would otherwise silently destroy
+them. Commit or stash your migration work first, or pair `--yes` with `--force` to
+overwrite deliberately.
 
 This does **not** apply migrations to a database — it only (re)writes the `.ts` files. Run `npm run migration:run` afterwards as usual. See [`CONTRIBUTING.md`](./CONTRIBUTING.md#database-migrations) for the workflow to follow when adding a _new_ migration.
 
@@ -205,14 +212,21 @@ Once running, access API docs at:
 
 ## Key Endpoints
 
-POST /accounts # Create ephemeral account
+POST /accounts # Create ephemeral account (also returns the claim token)
 GET /accounts/:id # Get account details
-POST /claims/initiate # Generate claim token
-POST /claims/redeem # Redeem claim and sweep
-GET /webhooks # List webhook subscriptions
+GET /accounts # List accounts (admin, paginated)
+POST /claims/verify # Check a claim token is still valid
+POST /claims/redeem # Redeem claim and sweep funds
+GET /claims/:id # Get a recorded claim
+GET /webhooks # List webhook subscriptions (active only, paginated)
 POST /webhooks # Subscribe to events
-PUT /webhooks/:id # Update webhook subscription (e.g. URL, events)
-DELETE /webhooks/:id # Delete webhook subscription
+PUT /webhooks/:id # Update webhook subscription (url, events, isActive, secret)
+DELETE /webhooks/:id # Soft-delete (deactivate) a webhook subscription
+
+Full request/response documentation: [API Reference](./docs/api-reference.md)
+
+> There is no `POST /claims/initiate` endpoint. The claim token is minted by
+> `POST /accounts` and returned once, in that response's `claimUrl`.
 
 ## Database Schema
 
@@ -308,7 +322,7 @@ See [Deployment Guide](./docs/deployment.md) for production setup.
 
 Visit http://localhost:3000/api/docs for API documentation.
 
-See [Getting Started Guide](../docs/getting-started.pdf) for full setup instructions.
+See [Getting Started Guide](./docs/getting-started.md) for full setup instructions.
 
 ## Support
 
@@ -317,3 +331,6 @@ See [Getting Started Guide](../docs/getting-started.pdf) for full setup instruct
 ## License
 
 UNLICENSED
+#   C I   t r i g g e r 
+ 
+ 

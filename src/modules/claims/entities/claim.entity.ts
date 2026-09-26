@@ -19,6 +19,14 @@ export class Claim {
   @Index('IDX_claims_accountId')
   accountId: string;
 
+  /**
+   * `onDelete: 'CASCADE'` only fires on a hard DELETE of the account row.
+   * `accounts` soft-delete (`deletedAt`) sets a flag and never removes the row,
+   * so claims survive soft-deletion and remain queryable. Documented under
+   * "Foreign Key Cascade Behavior" in docs/database-schema.md.
+   *
+   * Verified for #706 (duplicate of the already-resolved #645, fixed in PR #772).
+   */
   @ManyToOne(() => Account, { eager: false, onDelete: 'CASCADE' })
   @JoinColumn({
     name: 'accountId',

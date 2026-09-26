@@ -6,7 +6,7 @@ import {
   ApiParam,
   ApiBody,
 } from '@nestjs/swagger';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { ClaimsService } from './claims.service.js';
 import { ClaimDetailsDto } from './dto/claim-details.dto.js';
 import { VerifyClaimDto } from './dto/verify-claim.dto.js';
@@ -38,6 +38,10 @@ export class ClaimsController {
   }
 
   @Post('verify')
+  // Dedicated, tighter limit than the global default: this endpoint accepts a
+  // raw claim token and can otherwise be used to enumerate/probe valid tokens.
+  // Verified for #704 (duplicate of the already-resolved #643, fixed in PR #772).
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({ summary: 'Verify claim token validity' })
   @ApiResponse({
     status: 200,
@@ -58,6 +62,10 @@ export class ClaimsController {
   }
 
   @Post('redeem')
+  // Claim tokens are bearer secrets guarding on-chain fund movement, so this
+  // route gets an explicit, tighter limit than the app-wide default
+  // (ThrottlerModule.forRoot in app.module.ts) to slow brute-force guessing.
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({
     summary: 'Redeem claim and sweep funds to destination wallet',
   })

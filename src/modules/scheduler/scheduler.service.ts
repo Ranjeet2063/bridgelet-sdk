@@ -27,13 +27,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    const expiryIntervalMs = parseInt(
-      process.env.EXPIRY_CHECK_INTERVAL_MS ?? '300000',
-      10,
+    const expiryIntervalMs = this.configService.getOrThrow<number>(
+      'app.expiryCheckIntervalMs',
     );
-    const initializingIntervalMs = parseInt(
-      process.env.INITIALIZING_CLEANUP_INTERVAL_MS ?? '900000',
-      10,
+    const initializingIntervalMs = this.configService.getOrThrow<number>(
+      'app.initializingCleanupIntervalMs',
     );
 
     this.expiryHandle = setInterval(
@@ -139,9 +137,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
    * for these accounts.
    */
   async runInitializingCleanup(): Promise<void> {
-    const timeoutMs = parseInt(
-      process.env.INITIALIZING_TIMEOUT_MS ?? '600000',
-      10,
+    const timeoutMs = this.configService.getOrThrow<number>(
+      'app.initializingTimeoutMs',
     );
     const cutoff = new Date(Date.now() - timeoutMs);
 

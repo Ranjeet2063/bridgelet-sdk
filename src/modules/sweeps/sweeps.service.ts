@@ -32,16 +32,17 @@ export class SweepsService {
    * Execute sweep: authorize on-chain via SweepController contract, then
    * transfer funds via a classic Horizon payment.
    *
-   * Flow:
-   * Order of operations is strict and intentional:
-   *   1. Validate sweep parameters
-   *   2. Generate auth signature (MVP stub — see ContractProvider)
-   *   3. Submit SweepController.execute_sweep() on Soroban
-   *   4. Execute the Horizon payment to move funds
+   * The authoritative description of the 4-step flow, including a sequence
+   * diagram, lives in this module's README rather than here, so it does not
+   * have to be reverse-engineered from code comments (#651):
+   * {@link ../README.md | src/modules/sweeps/README.md} - see "Sweep Flow".
+   *
+   * The order of operations below is strict and intentional.
    *
    * ⚠️ If Step 3 succeeds but Step 4 fails, the contract will be in Swept
    * state but no funds will have moved. This is logged as a critical error
-   * for manual recovery. Do not retry automatically.
+   * for manual recovery. Do not retry automatically. The README section
+   * "Failure between steps 3 and 4" documents the recovery path.
    */
   public async executeSweep(
     sweepExecutionRequest: SweepExecutionRequest,

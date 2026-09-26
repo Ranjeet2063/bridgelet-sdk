@@ -114,6 +114,7 @@ describe('PaymentMonitorService', () => {
           'stellar.contracts.ephemeralAccount': 'CONTRACT123',
           'stellar.fundingSecret': 'SFUNDING_SECRET',
           'stellar.network': 'testnet',
+          'app.paymentPollIntervalMs': '30000',
         };
         if (!(key in map)) throw new Error(`Config key not found: ${key}`);
         return map[key];

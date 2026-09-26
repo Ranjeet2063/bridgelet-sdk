@@ -1,0 +1,96 @@
+# Local development environment (issue #538).
+#
+# `docker compose up` on its own starts only `postgres` and `migrate`:
+# a fresh Postgres instance with the schema fully migrated, with zero
+# required configuration (defaults below match .env.example). This is
+# meant to replace "manually provision a Postgres instance" in
+# docs/getting-started.md step 2-3; you still run the app itself with
+# `npm run start:dev` on the host as before, pointed at
+# DATABASE_HOST=localhost (the default in .env.example).
+#
+# If you'd rather run the NestJS app inside Docker too, opt in with:
+#   docker compose --profile app up
+# That additionally starts `app`, which needs a real .env (copy
+# .env.example -> .env and fill in your Stellar values first — the app
+# won't boot without them, in or out of Docker).
+#
+# Does not conflict with the embedded-Postgres integration suite
+# (test/migrations.integration.runner.ts): that suite starts its own
+# throwaway Postgres on a dynamically chosen free port for the duration
+# of the test run, entirely separate from this compose file's Postgres
+# container and named volume.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:-bridgelet_user}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-bridgelet_pass}
+      POSTGRES_DB: ${DATABASE_NAME:-bridgelet}
+    ports:
+      - '${DATABASE_PORT:-5432}:5432'
+    volumes:
+      - bridgelet_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: installs deps and runs `npm run migration:run` against the
+  # `postgres` service above, then exits. `depends_on: service_completed_successfully`
+  # on `app` means the app (when using --profile app) won't start until
+  # migrations have actually succeeded.
+  #
+  # Uses node:*-bookworm-slim (glibc), not node:*-alpine (musl): bcrypt's
+  # prebuilt binaries (node_modules/bcrypt/prebuilds/linux-*) are glibc-only,
+  # so alpine would fall back to compiling from source and fail without
+  # build-essential/python3 installed.
+  migrate:
+    image: node:22-bookworm-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+      - bridgelet_node_modules:/app/node_modules
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${DATABASE_USER:-bridgelet_user}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-bridgelet_pass}
+      DATABASE_NAME: ${DATABASE_NAME:-bridgelet}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: sh -c "npm ci && npm run migration:run"
+
+  # Opt-in: `docker compose --profile app up`. Requires a real .env
+  # (see docs/getting-started.md) for Stellar/KMS/JWT values; DATABASE_*
+  # here is overridden to point at the `postgres` service by name.
+  # Same glibc-vs-musl reasoning as `migrate` above applies here.
+  app:
+    image: node:22-bookworm-slim
+    working_dir: /app
+    profiles: ['app']
+    volumes:
+      - .:/app
+      - bridgelet_node_modules:/app/node_modules
+    ports:
+      - '${PORT:-3000}:3000'
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${DATABASE_USER:-bridgelet_user}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-bridgelet_pass}
+      DATABASE_NAME: ${DATABASE_NAME:-bridgelet}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: sh -c "npm ci && npm run start:dev"
+
+volumes:
+  bridgelet_postgres_data:
+  bridgelet_node_modules:

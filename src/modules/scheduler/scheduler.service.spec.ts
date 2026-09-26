@@ -65,6 +65,9 @@ describe('SchedulerService', () => {
       getOrThrow: jest.fn((key: string) => {
         const map: Record<string, string> = {
           'stellar.fundingSecret': 'SFUNDING_SECRET',
+          'app.expiryCheckIntervalMs': '300000',
+          'app.initializingCleanupIntervalMs': '900000',
+          'app.initializingTimeoutMs': '600000',
         };
         if (!(key in map)) throw new Error(`Config key not found: ${key}`);
         return map[key];

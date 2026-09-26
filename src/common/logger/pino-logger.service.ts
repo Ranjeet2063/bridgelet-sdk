@@ -1,6 +1,7 @@
 import { Injectable, LoggerService } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { getRequestId } from '../context/request-context.js';
+import appConfig from '../../config/app.config.js';
 
 type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
@@ -25,7 +26,7 @@ function redact(msg: string): string {
 @Injectable()
 export class PinoLoggerService implements LoggerService {
   private readonly service = 'bridgelet-sdk';
-  private readonly env = process.env.NODE_ENV ?? 'development';
+  private readonly env = appConfig().env;
 
   private write(level: LogLevel, message: unknown, context?: string): void {
     const raw = typeof message === 'string' ? message : JSON.stringify(message);

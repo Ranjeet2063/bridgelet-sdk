@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Account } from '../../accounts/entities/account.entity.js';
 import type { SweepExecutionRequest } from '../interfaces/execute-sweep.interface.js';
 import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
@@ -35,9 +35,11 @@ export class ValidationProvider {
       sweepExecutionRequest.destinationAddress,
     );
 
-    // Validate account exists and is in correct state
+    // Validate account exists, is in correct state, and has not been
+    // soft-deleted (deletedAt: IsNull() is explicit here even though
+    // TypeORM's @DeleteDateColumn already filters it, per issue #435).
     const account = await this.accountRepository.findOne({
-      where: { id: sweepExecutionRequest.accountId },
+      where: { id: sweepExecutionRequest.accountId, deletedAt: IsNull() },
     });
 
     if (!account) {
@@ -107,7 +109,7 @@ export class ValidationProvider {
   ): Promise<boolean> {
     try {
       const account = await this.accountRepository.findOne({
-        where: { id: accountId },
+        where: { id: accountId, deletedAt: IsNull() },
       });
 
       if (!account) return false;
@@ -128,7 +130,7 @@ export class ValidationProvider {
     accountId: string,
   ): Promise<{ canSweep: boolean; reason?: string }> {
     const account = await this.accountRepository.findOne({
-      where: { id: accountId },
+      where: { id: accountId, deletedAt: IsNull() },
     });
 
     if (!account) {

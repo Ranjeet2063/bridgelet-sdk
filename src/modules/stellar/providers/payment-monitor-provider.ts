@@ -22,7 +22,36 @@ import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
  *
  * Idempotency:
  *   DuplicateAsset errors from the contract are treated as no-ops - the stream
- *   may emit duplicate events and that is handled here, not in StellarService.
+ *   may emit duplicate events and that is handled here, not in StellarService. *
+ * ## Relationship to PaymentMonitorService (#652)
+ *
+ * `PaymentMonitorService` (src/modules/payment-monitor/) does the same job by
+ * the opposite mechanism, and the names do not signal that. The split is not
+ * "raw Horizon access vs. orchestration" - both talk to Horizon directly, both
+ * call `StellarService.recordPayment()`, and both move the account to
+ * `PENDING_CLAIM`. The real difference is how a payment is discovered:
+ *
+ * | | PaymentMonitorProvider (this file) | PaymentMonitorService |
+ * |---|---|---|
+ * | Mechanism | push: Horizon SSE stream | pull: `setInterval` poll |
+ * | Scope | one stream per watched account | sweeps all `PENDING_PAYMENT` accounts |
+ * | Started by | `AccountsService` calling `watch()` on creation | `onModuleInit`, automatically |
+ * | Cadence | as Horizon emits | `PAYMENT_POLL_INTERVAL_MS` (default 30s) |
+ * | Registered in | `StellarModule` | `PaymentMonitorModule` |
+ *
+ * **Both are live at the same time.** `AppModule` imports `StellarModule` and
+ * `PaymentMonitorModule`, so a single payment is typically seen twice - once by
+ * the stream, once by the next poll. That is safe rather than accidental:
+ * `recordPayment()` is idempotent on the contract side (`DuplicateAsset` is
+ * treated as a no-op in both files) and the status change is a conditional
+ * update that only moves `PENDING_PAYMENT -> PENDING_CLAIM`, never backwards.
+ *
+ * Practical guidance: the poller is the safety net that catches anything the
+ * stream misses (dropped connection, restart before `restoreActiveStreams()`).
+ * Treat the stream as the low-latency path and the poller as the backstop, and
+ * keep any new detection logic idempotent in the same two ways.
+ *
+ * Verified for #713 (duplicate of the already-resolved #652, fixed in PR #778).
  */
 
 @Injectable()

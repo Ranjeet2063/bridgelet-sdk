@@ -12,6 +12,47 @@ import { StellarService } from '../stellar/stellar.service.js';
 import { Account } from '../accounts/entities/account.entity.js';
 import { AccountStatus } from '../accounts/enums/account-status.enum.js';
 
+/**
+ * PaymentMonitorService - interval-based payment detection.
+ *
+ * Polls Horizon on a fixed interval for inbound payments to every account still
+ * in `PENDING_PAYMENT`. For each payment found it calls
+ * `StellarService.recordPayment()` to register it on the contract and moves the
+ * account to `PENDING_CLAIM`.
+ *
+ * Lifecycle:
+ *   - onModuleInit()     starts the poll loop (PAYMENT_POLL_INTERVAL_MS, default 30000)
+ *   - pollAllAccounts()  one pass over all PENDING_PAYMENT, unexpired accounts
+ *   - onModuleDestroy()  clears the interval
+ *
+ * ## Relationship to PaymentMonitorProvider (#652)
+ *
+ * `PaymentMonitorProvider` (src/modules/stellar/providers/) does the same job
+ * by the opposite mechanism, and the names do not signal that. The split is not
+ * "raw Horizon access vs. orchestration" - both talk to Horizon directly, both
+ * call `StellarService.recordPayment()`, and both move the account to
+ * `PENDING_CLAIM`. The real difference is how a payment is discovered:
+ *
+ * | | PaymentMonitorService (this file) | PaymentMonitorProvider |
+ * |---|---|---|
+ * | Mechanism | pull: `setInterval` poll | push: Horizon SSE stream |
+ * | Scope | sweeps all `PENDING_PAYMENT` accounts | one stream per watched account |
+ * | Started by | `onModuleInit`, automatically | `AccountsService` calling `watch()` |
+ * | Cadence | `PAYMENT_POLL_INTERVAL_MS` (default 30s) | as Horizon emits |
+ * | Registered in | `PaymentMonitorModule` | `StellarModule` |
+ *
+ * **Both are live at the same time.** `AppModule` imports both modules, so a
+ * single payment is typically seen twice - once by the stream, once by the next
+ * poll. That is safe rather than accidental: `recordPayment()` is idempotent on
+ * the contract side (`DuplicateAsset` is treated as a no-op in both files) and
+ * the status change is a conditional update that only moves
+ * `PENDING_PAYMENT -> PENDING_CLAIM`, never backwards.
+ *
+ * Practical guidance: this poller is the safety net that catches anything the
+ * stream misses (dropped connection, restart before `restoreActiveStreams()`).
+ * Treat the stream as the low-latency path and this as the backstop, and keep
+ * any new detection logic idempotent in the same two ways.
+ */
 @Injectable()
 export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PaymentMonitorService.name);
@@ -30,9 +71,8 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    const intervalMs = parseInt(
-      process.env.PAYMENT_POLL_INTERVAL_MS ?? '30000',
-      10,
+    const intervalMs = this.configService.getOrThrow<number>(
+      'app.paymentPollIntervalMs',
     );
     this.intervalHandle = setInterval(
       () => void this.pollAllAccounts(),

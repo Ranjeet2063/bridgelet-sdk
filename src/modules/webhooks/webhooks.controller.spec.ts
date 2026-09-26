@@ -81,20 +81,26 @@ describe('WebhooksController', () => {
         makeWebhookResponse(),
         makeWebhookResponse({ id: 'wh-uuid-2' }),
       ];
-      mockWebhooksService.findAll.mockResolvedValue(webhooks);
+      mockWebhooksService.findAll.mockResolvedValue({
+        webhooks,
+        total: webhooks.length,
+      });
 
       const result = await controller.findAll();
 
-      expect(mockWebhooksService.findAll).toHaveBeenCalled();
-      expect(result).toHaveLength(2);
+      expect(mockWebhooksService.findAll).toHaveBeenCalledWith(50, 0);
+      expect(result.webhooks).toHaveLength(2);
     });
 
-    it('returns an empty array when no webhooks exist', async () => {
-      mockWebhooksService.findAll.mockResolvedValue([]);
+    it('returns an empty list when no webhooks exist', async () => {
+      mockWebhooksService.findAll.mockResolvedValue({
+        webhooks: [],
+        total: 0,
+      });
 
       const result = await controller.findAll();
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({ webhooks: [], total: 0 });
     });
   });
 

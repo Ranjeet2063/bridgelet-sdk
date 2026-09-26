@@ -12,12 +12,17 @@
 # What it does:
 #   1. Refuses to run outside a git repo / outside the expected project
 #      (safety check so it can never be run against the wrong directory).
-#   2. Removes the existing src/database/migrations/ directory.
-#   3. Recreates it and writes out each migration file verbatim.
+#   2. Aborts when src/database/migrations/ contains uncommitted changes
+#      (modified, staged, or untracked files) unless --force was given,
+#      because the rewrite below would permanently discard them.
+#   3. Removes the existing src/database/migrations/ directory.
+#   4. Recreates it and writes out each migration file verbatim.
 #
 # Usage:
-#   ./scripts/generate-migrations.sh          # prompts before deleting
-#   ./scripts/generate-migrations.sh --yes    # skip the confirmation prompt
+#   ./scripts/generate-migrations.sh                  # prompts before deleting
+#   ./scripts/generate-migrations.sh --yes            # skip the confirmation prompt
+#   ./scripts/generate-migrations.sh --yes --force    # skip the prompt AND overwrite
+#                                                     # uncommitted changes in the folder
 #
 set -euo pipefail
 
@@ -32,11 +37,38 @@ if [ ! -f "$REPO_ROOT/package.json" ] || ! grep -q '"bridgelet-sdk"' "$REPO_ROOT
 fi
 
 AUTO_YES=false
+FORCE_OVERWRITE=false
 for arg in "$@"; do
   case "$arg" in
     --yes|-y) AUTO_YES=true ;;
+    --force) FORCE_OVERWRITE=true ;;
+    *)
+      echo "error: unknown argument: $arg" >&2
+      echo "       usage: $0 [--yes] [--force]" >&2
+      exit 1
+      ;;
   esac
 done
+
+# Pre-flight: this script deletes and rewrites the entire migrations folder,
+# so any hand-edited or never-committed migration file in it would be
+# silently destroyed. Refuse to run while git reports uncommitted changes
+# in that folder unless --force was explicitly given.
+UNCOMMITTED_MIGRATIONS="$(git -C "$REPO_ROOT" status --porcelain -- "$MIGRATIONS_DIR" 2>/dev/null || true)"
+if [ -n "$UNCOMMITTED_MIGRATIONS" ] && [ "$FORCE_OVERWRITE" != true ]; then
+  echo "error: uncommitted changes detected in src/database/migrations/:" >&2
+  echo "$UNCOMMITTED_MIGRATIONS" | sed 's/^/    /' >&2
+  echo "" >&2
+  echo "This script deletes and rewrites the entire migrations folder, so running" >&2
+  echo "it now would permanently discard the changes above. Commit or stash them" >&2
+  echo "first, or re-run with --yes --force to overwrite them deliberately." >&2
+  exit 1
+fi
+if [ -n "$UNCOMMITTED_MIGRATIONS" ] && [ "$FORCE_OVERWRITE" = true ]; then
+  echo "warning: --force given; the following uncommitted changes in" >&2
+  echo "         src/database/migrations/ will be overwritten:" >&2
+  echo "$UNCOMMITTED_MIGRATIONS" | sed 's/^/    /' >&2
+fi
 
 if [ -d "$MIGRATIONS_DIR" ] && [ "$AUTO_YES" != true ]; then
   read -r -p "This will delete and recreate $MIGRATIONS_DIR. Continue? [y/N] " reply

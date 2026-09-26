@@ -95,6 +95,14 @@ describe('stellar.config', () => {
     expect(config.network).toBe('mainnet');
   });
 
+  it('rejects an invalid STELLAR_NETWORK value', async () => {
+    process.env.STELLAR_NETWORK = 'main-net';
+    const mod = await import('./stellar.config.js');
+    expect(() => (mod.default as unknown as ConfigFactory)()).toThrow(
+      'Expected "mainnet" or "testnet"',
+    );
+  });
+
   it('uses STELLAR_HORIZON_URL when set', async () => {
     process.env.STELLAR_HORIZON_URL = 'https://horizon.stellar.org';
     const mod = await import('./stellar.config.js');

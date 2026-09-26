@@ -19,13 +19,28 @@ import { AddClaimingToAccountStatus1718100004000 } from '../src/database/migrati
 import { CreateWebhookDeliveriesTable1718100005000 } from '../src/database/migrations/1718100005000-CreateWebhookDeliveriesTable.js';
 import { AddHighTrafficIndexes1718100006000 } from '../src/database/migrations/1718100006000-AddHighTrafficIndexes.js';
 import { CreateContractEventsTable1718100007000 } from '../src/database/migrations/1718100007000-CreateContractEventsTable.js';
+import { AddDeletedAtToAccountsTable1718100008000 } from '../src/database/migrations/1718100008000-AddDeletedAtToAccountsTable.js';
 import { CreateClaimAuditLogTable1718100008000 } from '../src/database/migrations/1718100008000-CreateClaimAuditLogTable.js';
 import { AddPartialSweepToAccountStatus1718100008000 } from '../src/database/migrations/1718100008000-AddPartialSweepToAccountStatus.js';
+import { AddContractEventIndexes1718100009000 } from '../src/database/migrations/1718100009000-AddContractEventIndexes.js';
 
 const postgresUser = 'postgres';
 const postgresPassword = 'postgres';
 const postgresDatabase = 'bridgelet_test';
 
+// Note (issue #517): 1718100008000-AddDeletedAtToAccountsTable,
+// 1718100008000-AddPartialSweepToAccountStatus, and
+// 1718100008000-CreateClaimAuditLogTable all share the exact same numeric
+// timestamp. TypeORM sorts migrations by timestamp with a stable sort
+// (MigrationExecutor.getMigrations), so ties are broken by array order —
+// which in production comes from `glob`'s alphabetical file listing
+// (CONTRIBUTING.md "Notes on timestamps" documents this exact order and
+// explicitly says NOT to renumber these files, since environments that
+// already recorded these migration names would try to re-run them under
+// new names). This array matches that documented order so the round-trip
+// check below reflects real execution order, not just "a" valid order.
+// None of the three depends on the others (no FK or column overlap), so
+// this ordering choice doesn't change correctness — it's for fidelity.
 const migrations = [
   CreateAccountsTable1718100000000,
   CreateClaimsTable1718100001000,
@@ -35,8 +50,10 @@ const migrations = [
   CreateWebhookDeliveriesTable1718100005000,
   AddHighTrafficIndexes1718100006000,
   CreateContractEventsTable1718100007000,
-  CreateClaimAuditLogTable1718100008000,
+  AddDeletedAtToAccountsTable1718100008000,
   AddPartialSweepToAccountStatus1718100008000,
+  CreateClaimAuditLogTable1718100008000,
+  AddContractEventIndexes1718100009000,
 ];
 
 type SqlInMemoryLog = {
@@ -271,6 +288,70 @@ async function main(): Promise<void> {
       ({ indexname }) => indexname,
     );
 
+    // --- Issue #517: migration down() round-trip ---------------------
+    // Roll back every applied migration, one at a time in reverse order
+    // (dataSource.undoLastMigration() reverts exactly the most recently
+    // applied migration each call), then verify the schema has actually
+    // returned to its pre-migration state: no application tables left
+    // behind, the custom enum type gone, and the migrations tracking
+    // table itself empty.
+    let rollbackError: string | null = null;
+    const revertedMigrationNames: string[] = [];
+
+    for (let i = 0; i < executedMigrations.length; i++) {
+      try {
+        await dataSource.undoLastMigration({ transaction: 'each' });
+      } catch (error) {
+        rollbackError = `Failed reverting migration #${
+          executedMigrations.length - i
+        } (${executedMigrations[executedMigrations.length - 1 - i]?.name ?? 'unknown'}): ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        break;
+      }
+      revertedMigrationNames.push(
+        executedMigrations[executedMigrations.length - 1 - i].name,
+      );
+    }
+
+    const remainingTableRows: Array<{ tablename: string }> =
+      await dataSource.query(`
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+        ORDER BY tablename
+      `);
+    const remainingTables = remainingTableRows.map(
+      ({ tablename }) => tablename,
+    );
+
+    const remainingEnumRows: Array<{ typname: string }> =
+      await dataSource.query(`
+      SELECT typname
+      FROM pg_type
+      WHERE typname = 'account_status_enum'
+    `);
+
+    const migrationsTableRowCountRows: Array<{ count: string }> =
+      await dataSource.query(
+        `SELECT COUNT(*)::text AS count FROM "migrations"`,
+      );
+    const migrationsTableRowCount = parseInt(
+      migrationsTableRowCountRows[0]?.count ?? '-1',
+      10,
+    );
+
+    // Full rollback should leave exactly the "migrations" tracking table
+    // behind (TypeORM never drops its own tracking table), empty, with no
+    // application tables or the custom enum type remaining.
+    const rollbackReturnedToPriorState =
+      rollbackError === null &&
+      revertedMigrationNames.length === executedMigrations.length &&
+      remainingTables.length === 1 &&
+      remainingTables[0] === 'migrations' &&
+      remainingEnumRows.length === 0 &&
+      migrationsTableRowCount === 0;
+
     process.stdout.write(
       JSON.stringify({
         enumValues: enumRows.map(({ enumlabel }) => enumlabel),
@@ -285,8 +366,26 @@ async function main(): Promise<void> {
         schemaInSync: schemaLog.upQueries.length === 0,
         highTrafficIndexes,
         claimAuditLogIndexes,
+        rollbackError,
+        revertedMigrationNames,
+        remainingTablesAfterRollback: remainingTables,
+        rollbackReturnedToPriorState,
       }),
     );
+
+    // Issue #517: this is the actual pass/fail assertion for the down()
+    // round-trip, not just informational JSON. A non-zero exit here is
+    // meant to fail a CI step running this script.
+    if (!rollbackReturnedToPriorState) {
+      throw new Error(
+        `Migration down() round-trip did not return the schema to its ` +
+          `prior state. rollbackError=${rollbackError ?? 'none'}, ` +
+          `reverted=${revertedMigrationNames.length}/${executedMigrations.length}, ` +
+          `remainingTables=${JSON.stringify(remainingTables)}, ` +
+          `accountStatusEnumStillExists=${remainingEnumRows.length > 0}, ` +
+          `migrationsTableRowCount=${migrationsTableRowCount}`,
+      );
+    }
   } finally {
     if (dataSource?.isInitialized) {
       await dataSource.destroy();
@@ -299,5 +398,12 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error(error);
+  // Issue #517: process.exitCode alone was observed to not reliably
+  // propagate to the shell's exit code when this script is invoked
+  // through an ESM loader (e.g. `node --loader ts-node/esm`), which would
+  // silently defeat the point of an automated pass/fail check. Call
+  // process.exit explicitly so a failure here actually fails the
+  // invoking command/CI step.
   process.exitCode = 1;
+  process.exit(1);
 });

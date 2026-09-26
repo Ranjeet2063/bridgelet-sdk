@@ -16,6 +16,18 @@ export class ClaimLookupProvider {
   async findClaimById(id: string): Promise<ClaimDetailsDto> {
     this.logger.log(`Looking up claim: ${id}`);
 
+    // Issue #435 audit note: `relations: ['account']` performs a LEFT JOIN,
+    // and TypeORM's automatic `deletedAt IS NULL` filter only applies to
+    // the query's main alias (this Claim), not to joined relations. This
+    // is intentional here: a claim is a historical record that should
+    // remain visible even if the underlying account was later soft-deleted
+    // (e.g. by an admin cleanup). This method never uses the joined
+    // `account` to authorize a claim or sweep action, so it cannot be
+    // used to bypass the soft-delete on those paths.
+    //
+    // Verified for #703 (duplicate of the already-resolved #642, fixed in
+    // PR #774): the claimTokenHash lookup is served by the
+    // IDX_accounts_claimTokenHash index added in AddHighTrafficIndexes.
     const claim = await this.claimsRepository.findOne({
       where: { id },
       relations: ['account'],

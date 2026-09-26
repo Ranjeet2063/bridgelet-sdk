@@ -76,6 +76,46 @@ Edit the PR title directly in GitHub:
 
 3. **Never push directly to `main`** - always work in a branch
 
+### Local Database Setup (issue #538)
+
+You need a PostgreSQL instance before you can run migrations or start the
+app. Two ways to get one:
+
+**Recommended: Docker Compose.** From the repo root:
+
+```bash
+docker compose up
+```
+
+This provisions a Postgres 16 container with the same defaults as
+`.env.example` and automatically runs `npm run migration:run` against it
+(the `migrate` service waits for Postgres's healthcheck, then exits once
+migrations succeed). Nothing else is required — no `.env` file needed
+for this step. Once it's up, copy `.env.example` to `.env` (leaving
+`DATABASE_HOST=localhost` and the other `DATABASE_*` defaults as they
+are — they already point at the container's exposed port) and continue
+with `npm run start:dev` on the host as usual.
+
+If you'd rather run the NestJS app inside Docker too instead of on the
+host, first copy and fill in `.env` (Stellar/KMS/JWT values are
+required for the app to boot, in or out of Docker), then:
+
+```bash
+docker compose --profile app up
+```
+
+To reset to a completely clean database: `docker compose down -v` (the
+`-v` drops the named Postgres volume).
+
+This is separate from, and does not conflict with, the throwaway
+Postgres instance `test/migrations.integration.runner.ts` starts for
+its own test run — that one runs on a dynamically chosen free port for
+the duration of the test only.
+
+**Alternative: a manually provisioned Postgres.** See
+`docs/getting-started.md` for the fully manual path (install Postgres
+yourself, create the database, point `.env` at it).
+
 ## Development Workflow
 
 ### 1. Make Your Changes
@@ -208,6 +248,12 @@ When you open a PR, our CI will automatically run:
 ./scripts/generate-migrations.sh --yes
 ```
 
+The script refuses to run while `src/database/migrations/` has uncommitted changes
+(`git status --porcelain` pre-flight check), since it would otherwise delete any
+migration file you have hand-edited or not yet committed. Commit or stash first, or
+re-run with `./scripts/generate-migrations.sh --yes --force` to overwrite
+deliberately.
+
 ### Adding a new migration
 
 1. Generate the file with the TypeORM CLI as usual:
@@ -220,7 +266,7 @@ When you open a PR, our CI will automatically run:
 
 2. Write the `up()`/`down()` logic and confirm it locally (`npm run migration:run`, `npm run migration:revert`).
 3. **Add the new file's contents into `scripts/generate-migrations.sh`** as its own `cat > "$MIGRATIONS_DIR/<file>.ts" <<'MIGRATION_EOF' ... MIGRATION_EOF` block, in timestamp order, so the script stays the single source of truth for the folder.
-4. Run `./scripts/generate-migrations.sh --yes` and confirm `git diff` is empty — that's your proof the script and the folder agree.
+4. Run `./scripts/generate-migrations.sh --yes` and confirm `git diff` is empty — that's your proof the script and the folder agree. (If the new file is still uncommitted, commit it first, or pass `--force` to acknowledge the overwrite.)
 5. Update the migration list in [`README.md`](./README.md#installation) to include the new file.
 
 ### Notes on timestamps

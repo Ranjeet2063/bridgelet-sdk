@@ -62,6 +62,35 @@ export class StellarService {
     );
   }
 
+  /**
+   * Generates the ephemeral account keypair.
+   *
+   * ## Randomness source (audited, #654)
+   *
+   * This returns the actual secret key for an account that will hold funds, so
+   * the entropy source matters. The full chain, verified against the installed
+   * dependency tree, is:
+   *
+   *   StellarSdk.Keypair.random()                  @stellar/stellar-base
+   *     -> ed25519.utils.randomPrivateKey()        @noble/curves/ed25519
+   *       -> randomSecretKey(seed = randomBytes(32))
+   *         -> randomBytes()                       @noble/hashes/utils
+   *           -> crypto.getRandomValues()          Web Crypto CSPRNG
+   *
+   * `@noble/hashes` falls back to Node's `crypto.randomBytes()` on older
+   * runtimes and otherwise **throws** (`'crypto.getRandomValues must be
+   * defined'`). It never silently degrades to a weaker generator, so there is
+   * no path here that yields predictable key material.
+   *
+   * No intermediate helper in this codebase substitutes its own RNG: this method
+   * delegates straight to the SDK, and `Math.random()` appears nowhere in the
+   * key-generation path. `stellar.service.spec.ts` asserts that, so a future
+   * change that introduces one fails the suite rather than shipping quietly.
+   *
+   * If this ever needs to become deterministic for tests, inject a seed
+   * explicitly rather than swapping the generator - `Keypair.fromRawEd25519Seed()`
+   * is the supported way in.
+   */
   generateKeypair(): StellarSdk.Keypair {
     return StellarSdk.Keypair.random();
   }
