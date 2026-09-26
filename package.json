@@ -30,7 +30,8 @@
     "test:mutation": "stryker run",
     "test:mutation:crypto": "stryker run --mutate \"src/common/crypto/**/*.ts\"",
     "test:mutation:sweeps": "stryker run --mutate \"src/modules/sweeps/**/*.ts\"",
-    "audit:secrets": "ts-node --esm src/scripts/audit-legacy-secret-formats.ts"
+    "audit:secrets": "ts-node --esm src/scripts/audit-legacy-secret-formats.ts",
+    "check:embedded-postgres-types": "ts-node --esm scripts/check-embedded-postgres-types.ts"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "3.1075.0",

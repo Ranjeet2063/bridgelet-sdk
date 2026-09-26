@@ -30,6 +30,12 @@ jobs:
 
         run: npx prettier --check .
 
+      # embedded-postgres ships no types; test/embedded-postgres.d.ts is
+      # maintained by hand against a beta range. Fail the build if the pinned
+      # dependency and the declarations drift apart (issue #673).
+      - name: Verify embedded-postgres type declarations are in sync
+        run: npm run check:embedded-postgres-types
+
       - name: Linting
         run: npm run lint
 
