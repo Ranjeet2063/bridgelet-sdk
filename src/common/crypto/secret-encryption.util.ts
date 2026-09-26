@@ -51,7 +51,7 @@ export class SecretEncryptionUtil {
    * Resolves a key id to its 64-char hex key material. Returns undefined when
    * the id is unknown to the current key ring.
    */
-  export type KeyResolver = (keyId: string) => string | undefined;
+  static KeyResolver = (keyId: string) => string | undefined;
 
   static encrypt(plaintext: string, encryptionKey: string): string {
     return SecretEncryptionUtil.encryptWithKeyId(

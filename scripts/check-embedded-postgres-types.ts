@@ -67,7 +67,8 @@ if (verifiedVersion !== resolved) {
   fail(
     'test/embedded-postgres.d.ts was verified against ' +
       `${verifiedVersion} but package-lock.json resolves ${resolved}.\n` +
-      'embedded-postgres ships no types and is pinned to a beta range, so a ` + "`npm install`" + ' may have pulled a different build.\n' +
+      'embedded-postgres ships no types and is pinned to a beta range, so a `' +
+      '`npm install` may have pulled a different build.\n' +
       'Re-verify the ambient declarations against the new version, then update the ' +
       '`Verified against:` marker in test/embedded-postgres.d.ts.',
   );

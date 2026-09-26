@@ -6,7 +6,6 @@ import { Webhook } from './entities/webhook.entity.js';
 import { CreateWebhookDto } from './dto/create-webhook.dto.js';
 import { UpdateWebhookDto } from './dto/update-webhook.dto.js';
 import { WebhookResponseDto } from './dto/webhook-response.dto.js';
-<<<<<<< HEAD
 import { KmsKeyProvider } from '../../common/crypto/kms-key.provider.js';
 import { SecretEncryptionUtil } from '../../common/crypto/secret-encryption.util.js';
 import { parsePagination } from '../../common/utils/pagination.util.js';
