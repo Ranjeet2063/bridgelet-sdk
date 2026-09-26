@@ -30,4 +30,14 @@ export default registerAs('app', () => ({
   kmsEnabled: process.env.KMS_ENABLED !== 'false',
   kmsKeyId: process.env.KMS_KEY_ID,
   awsRegion: process.env.AWS_REGION ?? 'us-east-1',
+  // Previous AES-256 key, kept readable for the duration of a key rotation so
+  // ciphertext written under the old key stays decryptable (issue #621/#681).
+  // Unset once every row has been re-encrypted under the current key.
+  encryptionKeyPrevious: process.env.ENCRYPTION_KEY_PREVIOUS,
+  // Where the KMS-wrapped data key is persisted so it survives a restart
+  // instead of being regenerated (issue #619/#680).
+  kmsDataKeyPath: process.env.KMS_DATA_KEY_PATH,
+  // Key id written into `aes256gcm:v2:<keyId>:...` ciphertext. When unset,
+  // writes stay on the v1 format for backwards compatibility.
+  encryptionKeyId: process.env.ENCRYPTION_KEY_ID,
 }));

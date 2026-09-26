@@ -1,8 +1,8 @@
 import { registerDecorator, ValidationOptions } from 'class-validator';
-import { METADATA_MAX_BYTES } from '../utils/metadata-sanitizer.util.js';
-
-/** Maximum nesting depth allowed for a metadata object. */
-const METADATA_MAX_DEPTH = 3;
+import {
+  METADATA_MAX_BYTES,
+  METADATA_MAX_DEPTH,
+} from '../utils/metadata-sanitizer.util.js';
 
 function depthOf(value: unknown, depth = 0): number {
   if (

@@ -11,9 +11,18 @@ import * as crypto from 'crypto';
  * Encrypted format (v1, current):
  *   aes256gcm:v1:<iv_hex>:<authTag_hex>:<ciphertext_hex>
  *
+ * Encrypted format (v2, key-id tagged — used for rotation, see issue #681):
+ *   aes256gcm:v2:<keyId>:<iv_hex>:<authTag_hex>:<ciphertext_hex>
+ *
  * Format changelog
  * ───────────────
- * • v1 (current) ─ `aes256gcm:v1:` prefix + 16-byte random IV + 16-byte
+ * • v2 — same AES-256-GCM as v1 but carries the id of the key that produced
+ *   it. This is what makes a rotation possible without a flag day: during a
+ *   rotation window the decrypt path holds a key ring (current + previous)
+ *   and picks the right key from the tag instead of guessing. Written only
+ *   when a key id is supplied (see `encryptWithKeyId`); v1 remains the
+ *   default so existing deployments keep writing the format they can read.
+ * • v1 (current default) ─ `aes256gcm:v1:` prefix + 16-byte random IV + 16-byte
  *   GCM auth tag + ciphertext (all hex-encoded, colon-separated). The prefix
  *   lets us detect format and crash clearly on rows from unknown versions
  *   rather than silently mis-decoding.
@@ -25,7 +34,7 @@ import * as crypto from 'crypto';
  *
  * Key requirements:
  * - Must be a 32-byte value provided as a 64-character hex string
- * - Sourced from ENCRYPTION_KEY environment variable
+ * - Sourced from ENCRYPTION_KEY environment variable (or the KMS data key)
  * - Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
  */
 export class SecretEncryptionUtil {
@@ -33,9 +42,37 @@ export class SecretEncryptionUtil {
   private static readonly IV_LENGTH = 16;
   private static readonly AUTH_TAG_LENGTH = 16;
   private static readonly PREFIX_V1 = 'aes256gcm:v1:';
+  private static readonly PREFIX_V2 = 'aes256gcm:v2:';
   private static readonly PREFIX_PATTERN = /^aes256gcm:v(\d+):(.*)$/;
+  /** keyId segment: no colons, and not empty — it delimits the v2 body. */
+  private static readonly KEY_ID_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+
+  /**
+   * Resolves a key id to its 64-char hex key material. Returns undefined when
+   * the id is unknown to the current key ring.
+   */
+  export type KeyResolver = (keyId: string) => string | undefined;
 
   static encrypt(plaintext: string, encryptionKey: string): string {
+    return SecretEncryptionUtil.encryptWithKeyId(
+      plaintext,
+      encryptionKey,
+      undefined,
+    );
+  }
+
+  /**
+   * Encrypts `plaintext`, tagging the output with `keyId` so a later decrypt
+   * can select the correct key from a key ring (issue #681).
+   *
+   * Passing no `keyId` emits the v1 format, which is what
+   * {@link encrypt} does and what existing deployments expect.
+   */
+  static encryptWithKeyId(
+    plaintext: string,
+    encryptionKey: string,
+    keyId?: string,
+  ): string {
     const key = SecretEncryptionUtil.parseKey(encryptionKey);
     const iv = crypto.randomBytes(SecretEncryptionUtil.IV_LENGTH);
     const cipher = crypto.createCipheriv(
@@ -48,20 +85,42 @@ export class SecretEncryptionUtil {
       cipher.final(),
     ]);
     const authTag = cipher.getAuthTag();
-    return (
-      SecretEncryptionUtil.PREFIX_V1 +
-      [
-        iv.toString('hex'),
-        authTag.toString('hex'),
-        encrypted.toString('hex'),
-      ].join(':')
-    );
+    const body = [
+      iv.toString('hex'),
+      authTag.toString('hex'),
+      encrypted.toString('hex'),
+    ].join(':');
+
+    if (keyId === undefined) {
+      return SecretEncryptionUtil.PREFIX_V1 + body;
+    }
+
+    if (!SecretEncryptionUtil.KEY_ID_PATTERN.test(keyId)) {
+      throw new Error(
+        `Invalid keyId "${keyId}". Must be 1-64 characters of [A-Za-z0-9_.-]; ` +
+          'colons are reserved as format separators.',
+      );
+    }
+    return SecretEncryptionUtil.PREFIX_V2 + `${keyId}:${body}`;
   }
 
-  static decrypt(encryptedString: string, encryptionKey: string): string {
+  /**
+   * Decrypts a stored value.
+   *
+   * @param encryptedString the stored ciphertext
+   * @param encryptionKey the current key, used for v1 / unprefixed / base64 rows
+   * @param keyResolver required only for key-id tagged (v2) ciphertext: maps
+   *   the embedded key id to its key material. Omit it and a v2 value fails
+   *   loudly rather than being mis-decoded with the wrong key.
+   */
+  static decrypt(
+    encryptedString: string,
+    encryptionKey: string,
+    keyResolver?: SecretEncryptionUtil.KeyResolver,
+  ): string {
     const key = SecretEncryptionUtil.parseKey(encryptionKey);
 
-    // Handle v1+ prefixed payloads explicitly. Unknown versions (e.g. v2) must
+    // Handle v1+ prefixed payloads explicitly. Unknown versions (e.g. v3) must
     // crash loudly so we never silently decode with the wrong algorithm.
     const prefixMatch = encryptedString.match(
       SecretEncryptionUtil.PREFIX_PATTERN,
@@ -69,6 +128,14 @@ export class SecretEncryptionUtil {
     if (prefixMatch) {
       const version = parseInt(prefixMatch[1] ?? '', 10);
       const body = prefixMatch[2] ?? '';
+
+      if (version === 2) {
+        return SecretEncryptionUtil.decryptKeyIdTagged(
+          body,
+          keyResolver,
+        );
+      }
+
       if (version !== 1) {
         throw new Error(
           `Encrypted payload uses aes256gcm:v${version}: which is not supported by this build. ` +
@@ -99,6 +166,49 @@ export class SecretEncryptionUtil {
   }
 
   /**
+   * Splits a v2 body into `<keyId>:<iv>:<authTag>:<data>` and decrypts with
+   * the key the resolver returns for that id.
+   */
+  private static decryptKeyIdTagged(
+    body: string,
+    keyResolver: SecretEncryptionUtil.KeyResolver | undefined,
+  ): string {
+    const parts = body.split(':');
+    if (parts.length !== 4) {
+      throw new Error(
+        'Invalid encrypted format (aes256gcm:v2): expected 4 colon-separated ' +
+          `parts (keyId:iv:authTag:data), got ${parts.length}.`,
+      );
+    }
+    const [keyId, ...rest] = parts;
+    if (!keyId) {
+      throw new Error(
+        'Invalid encrypted format (aes256gcm:v2): keyId is empty.',
+      );
+    }
+    if (!keyResolver) {
+      throw new Error(
+        `Encrypted payload is tagged with key id "${keyId}" but no key ring was ` +
+          'supplied to resolve it. Pass a keyResolver (see SecretRotationUtil) ' +
+          'so the correct key can be selected during a rotation window.',
+      );
+    }
+    const resolved = keyResolver(keyId);
+    if (resolved === undefined) {
+      throw new Error(
+        `Encrypted payload references unknown key id "${keyId}". The key ring ` +
+          'does not contain it — either the rotation window has closed and the ' +
+          'row still needs migrating, or the wrong key set is loaded.',
+      );
+    }
+    return SecretEncryptionUtil.decryptBody(
+      rest.join(':'),
+      SecretEncryptionUtil.parseKey(resolved),
+      `aes256gcm:v2:${keyId}`,
+    );
+  }
+
+  /**
    * Pure, side-effect-free classifier used by scripts/migrate-secrets.ts and
    * its spec tests. Returns the bucketed format of a stored ciphertext.
    */
@@ -111,11 +221,12 @@ export class SecretEncryptionUtil {
     );
     if (prefixMatch) {
       const version = parseInt(prefixMatch[1] ?? '', 10);
-      if (
-        version === 1 &&
-        SecretEncryptionUtil.isAesGcmBody(prefixMatch[2] ?? '')
-      ) {
+      const body = prefixMatch[2] ?? '';
+      if (version === 1 && SecretEncryptionUtil.isAesGcmBody(body)) {
         return 'prefixed-aes-v1';
+      }
+      if (version === 2 && SecretEncryptionUtil.isKeyIdTaggedBody(body)) {
+        return 'prefixed-aes-v2';
       }
       return 'corrupt';
     }
@@ -123,6 +234,17 @@ export class SecretEncryptionUtil {
       return 'unprefixed-aes';
     }
     return 'legacy-base64';
+  }
+
+  /** Extracts the key id from a v2 payload, or null if it is not a valid v2. */
+  static keyIdOf(encryptedString: string): string | null {
+    if (SecretEncryptionUtil.classify(encryptedString) !== 'prefixed-aes-v2') {
+      return null;
+    }
+    const body = encryptedString
+      .slice(SecretEncryptionUtil.PREFIX_V2.length)
+      .trimStart();
+    return body.split(':')[0] ?? null;
   }
 
   private static decryptBody(
@@ -188,6 +310,17 @@ export class SecretEncryptionUtil {
     return true;
   }
 
+  /** `<keyId>:<iv>:<authTag>:<data>` with a well-formed keyId. */
+  private static isKeyIdTaggedBody(value: string): boolean {
+    const parts = value.split(':');
+    if (parts.length !== 4) return false;
+    const [keyId, ...aesParts] = parts;
+    if (!keyId || !SecretEncryptionUtil.KEY_ID_PATTERN.test(keyId)) {
+      return false;
+    }
+    return SecretEncryptionUtil.isAesGcmBody(aesParts.join(':'));
+  }
+
   private static isHex(s: string): boolean {
     return /^[0-9a-fA-F]+$/.test(s);
   }
@@ -211,6 +344,7 @@ export class SecretEncryptionUtil {
 
 export type SecretFormat =
   | 'prefixed-aes-v1'
+  | 'prefixed-aes-v2'
   | 'unprefixed-aes'
   | 'legacy-base64'
   | 'corrupt';

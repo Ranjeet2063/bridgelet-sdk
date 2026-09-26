@@ -29,7 +29,8 @@
     "migrate:secrets": "ts-node --esm src/scripts/migrate-secrets.ts",
     "test:mutation": "stryker run",
     "test:mutation:crypto": "stryker run --mutate \"src/common/crypto/**/*.ts\"",
-    "test:mutation:sweeps": "stryker run --mutate \"src/modules/sweeps/**/*.ts\""
+    "test:mutation:sweeps": "stryker run --mutate \"src/modules/sweeps/**/*.ts\"",
+    "audit:secrets": "ts-node --esm src/scripts/audit-legacy-secret-formats.ts"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "3.1075.0",

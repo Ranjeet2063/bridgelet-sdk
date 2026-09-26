@@ -13,6 +13,7 @@ import * as crypto from 'crypto';
 import { Account } from '../../accounts/entities/account.entity.js';
 import { ClaimVerificationResponseDto } from '../dto/claim-verification-response.dto.js';
 import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
+import { verifyClaimTokenWithRotation } from '../../../common/guards/jwt-rotation.util.js';
 
 const { TokenExpiredError, JsonWebTokenError } = jwt;
 
@@ -100,7 +101,14 @@ export class TokenVerificationProvider {
     try {
       const jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
 
-      const payload = jwt.verify(token, jwtSecret) as ClaimTokenPayload;
+      // Verifies against the active secret, falling back to JWT_SECRET_PREVIOUS
+      // while a rotation window is open (issue #683). Claim tokens can be valid
+      // for up to CLAIM_TOKEN_EXPIRY, so a rotation without a grace window
+      // would strand every unclaimed token in flight.
+      const payload = verifyClaimTokenWithRotation<ClaimTokenPayload>(
+        token,
+        jwtSecret,
+      );
 
       // Verify token type is 'claim'
       if (payload.type !== 'claim') {

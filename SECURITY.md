@@ -11,7 +11,7 @@ Every ephemeral account's Stellar secret key is encrypted before it is written t
 
 - **Algorithm:** AES-256-GCM (authenticated encryption — tamper-evident, unique IV per write).
 - **Implementation:** [`SecretEncryptionUtil`](src/common/crypto/secret-encryption.util.ts). This is the single, shared implementation for encrypt/decrypt of secret material — it must never be reimplemented inline elsewhere.
-- **Stored format:** `aes256gcm:v1:<iv_hex>:<authTag_hex>:<ciphertext_hex>`. The `aes256gcm:v1:` prefix makes the format self-describing so a future format change (`v2`, KMS envelope metadata, etc.) fails loudly on an unrecognized version rather than silently mis-decoding.
+- **Stored format:** `aes256gcm:v1:<iv_hex>:<authTag_hex>:<ciphertext_hex>`, or `aes256gcm:v2:<keyId>:<iv_hex>:<authTag_hex>:<ciphertext_hex>` when a key id is configured. The `aes256gcm:v1:`/`v2:` prefix makes the format self-describing so a future format change fails loudly on an unrecognized version rather than silently mis-decoding.
 - **Key length:** 256-bit (32-byte) key, supplied as a 64-character hex string.
 
 ### Key management
@@ -20,9 +20,31 @@ The encryption key is never stored alongside the encrypted data (i.e. never in t
 
 - **Production (recommended):** [`KmsKeyProvider`](src/common/crypto/kms-key.provider.ts) sources the data-encryption key from AWS KMS via envelope encryption:
   - On startup, the service calls `GenerateDataKey` against a KMS Customer Master Key (`KMS_KEY_ID`). The plaintext data key is held in memory only, for the lifetime of the process, and is used to encrypt/decrypt secret rows via `SecretEncryptionUtil`. The CMK itself never leaves AWS.
+  - The **encrypted** data-key blob is persisted — via `KMS_ENCRYPTED_DATA_KEY`, else the file at `KMS_DATA_KEY_PATH` — and unwrapped with KMS `Decrypt` on the next start. This matters: regenerating the data key on every restart would make every `secretKeyEncrypted` value written under the previous one undecryptable, permanently.
+  - If a persisted blob exists but cannot be unwrapped (wrong CMK, rotated-away key, corrupted file), the provider **refuses to generate a new data key** and falls back to `ENCRYPTION_KEY`, logging an error. Regenerating in that situation would destroy access while appearing healthy.
   - Configure with `KMS_ENABLED=true`, `KMS_KEY_ID=<arn-or-alias>`, `AWS_REGION=<region>`.
-  - Key rotation is a distinct operational concern from this envelope scheme — rotating the CMK requires re-wrapping (`decryptDataKey`) and re-encrypting existing rows; it is not automatic.
+  - For multi-instance deployments, replace the local file with a durable store (AWS Systems Manager Parameter Store / Secrets Manager) by populating `KMS_ENCRYPTED_DATA_KEY` out of band. The plaintext is never written to disk either way.
+  - Rotating the CMK requires re-wrapping (`decryptDataKey`) and re-encrypting existing rows; it is not automatic.
 - **Fallback (non-production / local dev only):** if `KMS_ENABLED=false` or `KMS_KEY_ID` is unset, the service falls back to a static key from the `ENCRYPTION_KEY` environment variable (see `.env.example`). This path exists for local development and tests. **Do not run production with real funds on the `ENCRYPTION_KEY` fallback path** — use KMS.
+
+### Key rotation
+
+[`SecretRotationUtil`](src/common/crypto/secret-rotation.util.ts) provides the dual-key decrypt path, and `KmsKeyProvider` wires it in for both the KMS and fallback paths.
+
+Two mechanisms, because two problems exist:
+
+- **Untagged rows** (`v1`, unprefixed). These name no key, so the only way to read one is to try the current key and then the previous one. Set `ENCRYPTION_KEY_PREVIOUS` to keep old rows readable.
+- **Key-id tagged rows** (`v2`). These name the key they need, so the right key is selected directly rather than by trial. Set `ENCRYPTION_KEY_ID` to opt into tagged writes.
+
+During a rotation:
+
+1. Set `ENCRYPTION_KEY_ID` (new key id) and `ENCRYPTION_KEY_PREVIOUS` (the outgoing key material).
+2. Deploy. New writes are tagged `v2`; reads resolve either format.
+3. Re-encrypt existing rows (`npm run migrate:secrets`), or simply let them age out.
+4. Confirm the outgoing key id is no longer in use with `npm run audit:secrets` (see below).
+5. Unset `ENCRYPTION_KEY_PREVIOUS` once nothing needs it.
+
+A v2 row whose key id is unknown to the loaded key ring **fails loudly** rather than being mis-decoded with the current key.
 
 ### Migration from legacy formats
 
@@ -39,6 +61,17 @@ npm run migrate:secrets -- --i-have-a-backup --execute
 ```
 
 See the header comment in [`src/scripts/migrate-secrets.ts`](src/scripts/migrate-secrets.ts) for full safety semantics (dry-run default, optimistic concurrency, audit log, halt-on-corrupt-row).
+
+`decrypt()` also still accepts **unprefixed** pre-`v1` AES-GCM rows, for databases partway through the migration. Those branches are only removable once nothing needs them, so there is a check that answers that question:
+
+```bash
+psql -At -c 'SELECT "secretKeyEncrypted" FROM accounts' > secrets.json
+npm run audit:secrets -- ./secrets.json
+```
+
+It prints a per-format breakdown plus the key ids currently in use, and exits
+non-zero while any legacy or corrupt row remains — so it can gate the cleanup
+that deletes those branches from `decrypt()`.
 
 **No production deployment with real funds should occur against a database that still has any `legacy-base64` rows.** Run the migration (or start from a fresh database) first.
 
