@@ -55,10 +55,7 @@ export class SweepMetricsProvider {
    * against the same default registry. Reuse an existing metric when the name
    * is already taken rather than crashing.
    */
-  private getOrCreateGauge(
-    name: string,
-    config: { help: string },
-  ): Gauge {
+  private getOrCreateGauge(name: string, config: { help: string }): Gauge {
     const existing = this.registry.getSingleMetric(name);
     if (existing) return existing as Gauge;
     return new Gauge({

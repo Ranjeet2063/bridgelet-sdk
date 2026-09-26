@@ -53,8 +53,7 @@ if (!Array.isArray(parsed)) {
 const values: string[] = parsed.map((row) => {
   if (typeof row === 'string') return row;
   if (row && typeof row === 'object' && 'secretKeyEncrypted' in row) {
-    const value = (row as { secretKeyEncrypted: unknown })
-      .secretKeyEncrypted;
+    const value = (row as { secretKeyEncrypted: unknown }).secretKeyEncrypted;
     return typeof value === 'string' ? value : '';
   }
   return '';

@@ -463,9 +463,9 @@ describe('Expired claim token (e2e) [issue #674]', () => {
     // No on-chain movement may have been attempted...
     expect(executeSweep).not.toHaveBeenCalled();
     // ...and no claim row may exist.
-    expect(
-      await ds!.getRepository(Claim).count({ where: { accountId } }),
-    ).toBe(0);
+    expect(await ds!.getRepository(Claim).count({ where: { accountId } })).toBe(
+      0,
+    );
     // The account must be left in its original state, not stuck mid-flow.
     const account = await ds!.getRepository(Account).findOneByOrFail({
       id: accountId,
@@ -523,8 +523,8 @@ describe('Expired claim token (e2e) [issue #674]', () => {
       });
     expect(redeemRes.status).toBeLessThan(500);
     expect(executeSweep).not.toHaveBeenCalled();
-    expect(
-      await ds!.getRepository(Claim).count({ where: { accountId } }),
-    ).toBe(0);
+    expect(await ds!.getRepository(Claim).count({ where: { accountId } })).toBe(
+      0,
+    );
   });
 });

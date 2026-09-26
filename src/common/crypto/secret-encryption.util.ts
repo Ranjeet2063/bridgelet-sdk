@@ -130,10 +130,7 @@ export class SecretEncryptionUtil {
       const body = prefixMatch[2] ?? '';
 
       if (version === 2) {
-        return SecretEncryptionUtil.decryptKeyIdTagged(
-          body,
-          keyResolver,
-        );
+        return SecretEncryptionUtil.decryptKeyIdTagged(body, keyResolver);
       }
 
       if (version !== 1) {

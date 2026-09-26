@@ -91,15 +91,15 @@ Each delivery attempt is recorded against the subscription in the
 `src/modules/webhooks/entities/webhook-delivery.entity.ts`), which is useful
 when debugging why a receiver did not see an event:
 
-| Column                | Meaning                                                  |
-| --------------------- | -------------------------------------------------------- |
-| `subscriptionId`      | The webhook the delivery was for (`ON DELETE CASCADE`).  |
-| `eventType`           | The event that triggered it.                             |
-| `payloadHash`         | SHA-256 of the delivered body, for correlating duplicates.|
-| `attemptCount`        | Number of delivery attempts made.                        |
-| `lastResponseCode`    | The receiver's HTTP status, if it responded.             |
-| `lastResponseBody`    | Truncated receiver response body (max 2048 chars).       |
-| `deliveredAt`         | When a delivery last succeeded; null while failing.       |
+| Column             | Meaning                                                    |
+| ------------------ | ---------------------------------------------------------- |
+| `subscriptionId`   | The webhook the delivery was for (`ON DELETE CASCADE`).    |
+| `eventType`        | The event that triggered it.                               |
+| `payloadHash`      | SHA-256 of the delivered body, for correlating duplicates. |
+| `attemptCount`     | Number of delivery attempts made.                          |
+| `lastResponseCode` | The receiver's HTTP status, if it responded.               |
+| `lastResponseBody` | Truncated receiver response body (max 2048 chars).         |
+| `deliveredAt`      | When a delivery last succeeded; null while failing.        |
 
 A `subscriptionId` with `deliveredAt: null` and a non-null
 `lastResponseCode` is a delivery your endpoint rejected.

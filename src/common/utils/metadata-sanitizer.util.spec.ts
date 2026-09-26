@@ -78,7 +78,10 @@ describe('sanitizeMetadata', () => {
     const payload = JSON.parse(
       '{"outer": {"__proto__": {"polluted": true}, "safe": "ok"}}',
     );
-    const result = sanitizeMetadata(payload) as Record<string, Record<string, unknown>>;
+    const result = sanitizeMetadata(payload) as Record<
+      string,
+      Record<string, unknown>
+    >;
     expect(result.outer).toEqual({ safe: 'ok' });
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
@@ -177,7 +180,9 @@ describe('sanitizeMetadata', () => {
     })!;
     expect(result).toHaveProperty('ok');
     expect(result).toHaveProperty(['y'.repeat(METADATA_MAX_KEY_LENGTH)]);
-    expect(result).not.toHaveProperty(['x'.repeat(METADATA_MAX_KEY_LENGTH + 1)]);
+    expect(result).not.toHaveProperty([
+      'x'.repeat(METADATA_MAX_KEY_LENGTH + 1),
+    ]);
   });
 
   // ── rule 5: depth budget ────────────────────────────────────────────────────
@@ -202,7 +207,9 @@ describe('sanitizeMetadata', () => {
 
   it('applies the same depth budget inside arrays', () => {
     // depth 1 = root, 2 = the array, 3 = its objects. One more is dropped.
-    const result = sanitizeMetadata({ list: [{ keep: 1 }, { drop: { x: 1 } }] })!;
+    const result = sanitizeMetadata({
+      list: [{ keep: 1 }, { drop: { x: 1 } }],
+    })!;
     expect(result).toEqual({ list: [{ keep: 1 }, {}] });
   });
 

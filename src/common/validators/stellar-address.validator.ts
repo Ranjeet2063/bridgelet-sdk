@@ -61,7 +61,10 @@ export class StellarAddressValidator {
       if (options.allowContractAddress && StrKey.isValidContract(address)) {
         return true;
       }
-      if (options.allowMuxedAccount && StrKey.isValidMed25519PublicKey(address)) {
+      if (
+        options.allowMuxedAccount &&
+        StrKey.isValidMed25519PublicKey(address)
+      ) {
         return true;
       }
       return false;

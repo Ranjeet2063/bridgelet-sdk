@@ -46,9 +46,7 @@ export class SecretRotationUtil {
   /**
    * Builds a `SecretEncryptionUtil.KeyResolver` backed by a key ring.
    */
-  static keyResolver(
-    ring: SecretKeyRing,
-  ): SecretEncryptionUtil.KeyResolver {
+  static keyResolver(ring: SecretKeyRing): SecretEncryptionUtil.KeyResolver {
     const table: Record<string, string> = {
       ...(ring.previousKeys ?? {}),
       [ring.currentKeyId]: ring.currentKey,
@@ -122,11 +120,7 @@ export class SecretRotationUtil {
     );
     return options.keyId === undefined
       ? SecretEncryptionUtil.encrypt(plaintext, newKey)
-      : SecretEncryptionUtil.encryptWithKeyId(
-          plaintext,
-          newKey,
-          options.keyId,
-        );
+      : SecretEncryptionUtil.encryptWithKeyId(plaintext, newKey, options.keyId);
   }
 
   /**
@@ -147,9 +141,7 @@ export class SecretRotationUtil {
    * Classifies stored values, extended with the key ids in play. Used by the
    * legacy-format audit to report what a rotation would still have to migrate.
    */
-  static audit(
-    encryptedValues: string[],
-  ): {
+  static audit(encryptedValues: string[]): {
     total: number;
     byFormat: Record<SecretFormat, number>;
     legacyCount: number;
@@ -168,8 +160,7 @@ export class SecretRotationUtil {
     return {
       total: encryptedValues.length,
       byFormat,
-      legacyCount:
-        byFormat['unprefixed-aes'] + byFormat['legacy-base64'],
+      legacyCount: byFormat['unprefixed-aes'] + byFormat['legacy-base64'],
       keyIdsInUse: SecretRotationUtil.keyIdsInUse(encryptedValues),
     };
   }

@@ -2,10 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
-import {
-  BadRequestException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import jwt from 'jsonwebtoken';
 import { TokenVerificationProvider } from './token-verification.provider.js';
 import { ClaimRedemptionProvider } from './claim-redemption.provider.js';
@@ -117,7 +114,10 @@ describe('Claim token expiry vs. account expiry (audit)', () => {
         providers: [
           ClaimRedemptionProvider,
           { provide: getRepositoryToken(Claim), useValue: claimsRepository },
-          { provide: getRepositoryToken(Account), useValue: accountsRepository },
+          {
+            provide: getRepositoryToken(Account),
+            useValue: accountsRepository,
+          },
           { provide: DataSource, useValue: dataSource },
           { provide: TokenVerificationProvider, useValue: tokenVerification },
           { provide: SweepsService, useValue: { executeSweep } },

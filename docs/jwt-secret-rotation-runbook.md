@@ -46,7 +46,7 @@ The rotation window exists to make that a non-event.
      from the new-secret attempt (so `TokenExpiredError` is still reported as
      an expired token rather than a signature failure).
 
-3. **Verify the window is open.** Redeem a token minted *before* the deploy —
+3. **Verify the window is open.** Redeem a token minted _before_ the deploy —
    it must still succeed. Then confirm a freshly created account's token also
    verifies. If the pre-deploy token fails, `JWT_SECRET_PREVIOUS` is not
    reaching the process; do not proceed.
@@ -64,7 +64,7 @@ The rotation window exists to make that a non-event.
    # JWT_SECRET_PREVIOUS removed
    ```
 
-   Deploy. Only outstanding tokens that are *also* past their own `exp` can
+   Deploy. Only outstanding tokens that are _also_ past their own `exp` can
    now fail — which is the intended steady state.
 
 ## Rollback

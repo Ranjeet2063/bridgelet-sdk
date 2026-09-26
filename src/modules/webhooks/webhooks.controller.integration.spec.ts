@@ -62,11 +62,7 @@ class FakeRepository {
     return webhook;
   }
 
-  async findOne({
-    where,
-  }: {
-    where: { id: string };
-  }): Promise<Webhook | null> {
+  async findOne({ where }: { where: { id: string } }): Promise<Webhook | null> {
     return this.rows.get(where.id) ?? null;
   }
 
@@ -252,9 +248,15 @@ describe('WebhooksController integration (real service + repository)', () => {
 
     it('returns non-overlapping, gapless pages', async () => {
       const seeded = repo.seed(5);
-      const page1 = (await controller.findAll('2', '0')).webhooks.map((w) => w.id);
-      const page2 = (await controller.findAll('2', '2')).webhooks.map((w) => w.id);
-      const page3 = (await controller.findAll('2', '4')).webhooks.map((w) => w.id);
+      const page1 = (await controller.findAll('2', '0')).webhooks.map(
+        (w) => w.id,
+      );
+      const page2 = (await controller.findAll('2', '2')).webhooks.map(
+        (w) => w.id,
+      );
+      const page3 = (await controller.findAll('2', '4')).webhooks.map(
+        (w) => w.id,
+      );
 
       expect([...page1, ...page2, ...page3]).toEqual(seeded.map((w) => w.id));
       // The core guarantee: nothing duplicated, nothing skipped.
@@ -296,15 +298,14 @@ describe('WebhooksController integration (real service + repository)', () => {
       ['empty limit', '', '0'],
       ['non-numeric offset', '10', 'xyz'],
       ['decimal offset', '10', '2.5'],
-    ])('rejects a %s with 400 instead of failing in the query', async (
-      _label,
-      limit,
-      offset,
-    ) => {
-      await expect(controller.findAll(limit, offset)).rejects.toThrow(
-        BadRequestException,
-      );
-    });
+    ])(
+      'rejects a %s with 400 instead of failing in the query',
+      async (_label, limit, offset) => {
+        await expect(controller.findAll(limit, offset)).rejects.toThrow(
+          BadRequestException,
+        );
+      },
+    );
 
     it('clamps a negative offset to zero rather than erroring', async () => {
       repo.seed(2);

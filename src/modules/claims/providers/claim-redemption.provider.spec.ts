@@ -643,7 +643,12 @@ describe('ClaimRedemptionProvider', () => {
           .fn()
           .mockImplementationOnce(
             async (cb: (m: unknown) => Promise<unknown>) =>
-              cb(makeManager({ ...mockAccount, status: AccountStatus.PARTIAL_SWEEP })),
+              cb(
+                makeManager({
+                  ...mockAccount,
+                  status: AccountStatus.PARTIAL_SWEEP,
+                }),
+              ),
           ),
       };
       const p = await buildModule(ds);

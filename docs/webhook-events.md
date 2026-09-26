@@ -10,13 +10,13 @@ The request body delivered to your endpoint is always
 `{ "event": "<name>", ...payload }` — the event name is repeated as the
 `event` field, and also sent as the `X-Bridgelet-Event` header.
 
-| Event              | Emitted by                                | Meaning                                          |
-| ------------------ | ----------------------------------------- | ------------------------------------------------ |
-| `account.created`  | `AccountsService.create()`                | An ephemeral account was created and funded.     |
-| `account.expired`  | `SchedulerService.handleExpiredClaims()`   | An account passed its expiry and was swept to the recovery address. |
-| `sweep.completed`  | `ClaimRedemptionProvider.redeemClaim()`   | A claim was redeemed and funds were swept.       |
-| `sweep.partial`    | `ClaimRedemptionProvider.redeemClaim()`   | The contract authorised the sweep but the Horizon payment did not settle. |
-| `sweep.failed`     | `ClaimRedemptionProvider.redeemClaim()`   | A redemption attempt failed.                     |
+| Event             | Emitted by                               | Meaning                                                                   |
+| ----------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
+| `account.created` | `AccountsService.create()`               | An ephemeral account was created and funded.                              |
+| `account.expired` | `SchedulerService.handleExpiredClaims()` | An account passed its expiry and was swept to the recovery address.       |
+| `sweep.completed` | `ClaimRedemptionProvider.redeemClaim()`  | A claim was redeemed and funds were swept.                                |
+| `sweep.partial`   | `ClaimRedemptionProvider.redeemClaim()`  | The contract authorised the sweep but the Horizon payment did not settle. |
+| `sweep.failed`    | `ClaimRedemptionProvider.redeemClaim()`  | A redemption attempt failed.                                              |
 
 ### `account.created`
 
@@ -33,13 +33,13 @@ Emitted after the account is initialised on-chain and persisted.
 }
 ```
 
-| Field       | Type     | Notes                                        |
-| ----------- | -------- | -------------------------------------------- |
-| `accountId` | string   | Internal account UUID.                       |
-| `publicKey` | string   | Stellar address of the ephemeral account.    |
-| `amount`    | string   | Decimal string, 7 dp.                        |
-| `asset`     | string   | `native`, or `CODE:ISSUER`.                  |
-| `expiresAt` | ISO 8601 | When the account becomes unusable.           |
+| Field       | Type     | Notes                                     |
+| ----------- | -------- | ----------------------------------------- |
+| `accountId` | string   | Internal account UUID.                    |
+| `publicKey` | string   | Stellar address of the ephemeral account. |
+| `amount`    | string   | Decimal string, 7 dp.                     |
+| `asset`     | string   | `native`, or `CODE:ISSUER`.               |
+| `expiresAt` | ISO 8601 | When the account becomes unusable.        |
 
 > The claim token is **not** included. It is returned exactly once, in the
 > `POST /accounts` response's `claimUrl`, and only a hash is persisted — so
@@ -59,11 +59,11 @@ Emitted by the expiry sweep. Funds have been recovered to the account's
 }
 ```
 
-| Field       | Type     | Notes                                |
-| ----------- | -------- | ------------------------------------ |
-| `accountId` | string   | Internal account UUID.               |
+| Field       | Type     | Notes                                   |
+| ----------- | -------- | --------------------------------------- |
+| `accountId` | string   | Internal account UUID.                  |
 | `publicKey` | string   | Stellar address of the expired account. |
-| `expiredAt` | ISO 8601 | When the transition happened.        |
+| `expiredAt` | ISO 8601 | When the transition happened.           |
 
 ### `sweep.completed`
 
@@ -82,15 +82,15 @@ Emitted on successful redemption. Funds are on their way to `destination`.
 }
 ```
 
-| Field        | Type              | Notes                                              |
-| ------------ | ----------------- | -------------------------------------------------- |
-| `accountId`  | string            | Internal account UUID.                             |
-| `amount`     | string            | Amount swept.                                      |
-| `asset`      | string            | `native`, or `CODE:ISSUER`.                        |
-| `destination`| string            | Where the funds were sent.                         |
-| `txHash`     | string            | Stellar tx hash — reconcile against this.          |
-| `sweptAt`    | ISO 8601          | When the claim was recorded.                       |
-| `metadata`   | object \| null    | The account's sanitised metadata, if any.          |
+| Field         | Type           | Notes                                     |
+| ------------- | -------------- | ----------------------------------------- |
+| `accountId`   | string         | Internal account UUID.                    |
+| `amount`      | string         | Amount swept.                             |
+| `asset`       | string         | `native`, or `CODE:ISSUER`.               |
+| `destination` | string         | Where the funds were sent.                |
+| `txHash`      | string         | Stellar tx hash — reconcile against this. |
+| `sweptAt`     | ISO 8601       | When the claim was recorded.              |
+| `metadata`    | object \| null | The account's sanitised metadata, if any. |
 
 ### `sweep.partial`
 
@@ -110,10 +110,10 @@ resumes the payment without re-authorising the contract.
 }
 ```
 
-| Field              | Type     | Notes                                        |
-| ------------------ | -------- | -------------------------------------------- |
-| `error`            | string   | Failure reason from the sweep path.          |
-| `contractAuthHash` | string   | The authorisation that already succeeded.    |
+| Field              | Type   | Notes                                     |
+| ------------------ | ------ | ----------------------------------------- |
+| `error`            | string | Failure reason from the sweep path.       |
+| `contractAuthHash` | string | The authorisation that already succeeded. |
 
 Treat this as **retryable**, not terminal. Do not create a replacement account
 for a partial sweep — the original still holds the authorised state.
@@ -136,10 +136,10 @@ claim token can retry.
 }
 ```
 
-| Field       | Type     | Notes                                        |
-| ----------- | -------- | -------------------------------------------- |
+| Field       | Type     | Notes                                                            |
+| ----------- | -------- | ---------------------------------------------------------------- |
 | `error`     | string   | Failure reason. Message text is not stable — do not match on it. |
-| `timestamp` | ISO 8601 | When the failure was recorded.               |
+| `timestamp` | ISO 8601 | When the failure was recorded.                                   |
 
 `sweep.completed` and `sweep.failed` are mutually exclusive for a given
 redemption: a successful redemption fires only `sweep.completed`, a failed one

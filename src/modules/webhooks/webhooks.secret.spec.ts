@@ -244,9 +244,7 @@ describe('WebhooksService — secret handling', () => {
     it('supports a legacy row whose secret was stored as plaintext', async () => {
       // Pre-encryption rows must keep working: the stored value is not a
       // recognised ciphertext format, so it is used as-is.
-      qb.getMany.mockResolvedValue([
-        makeWebhook({ secret: PLAINTEXT_SECRET }),
-      ]);
+      qb.getMany.mockResolvedValue([makeWebhook({ secret: PLAINTEXT_SECRET })]);
       await service.triggerEvent('sweep.completed', { accountId: 'a1' });
       const init = fetchSpy.mock.calls[0]![1] as RequestInit;
       const headers = init.headers as Record<string, string>;

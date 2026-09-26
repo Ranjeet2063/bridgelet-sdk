@@ -40,9 +40,8 @@ jest.mock('@aws-sdk/client-kms', () => {
 
 /** The shared `send` mock backing every mocked KMSClient instance. */
 function kmsSendMock(): jest.Mock {
-  return (
-    jest.requireMock('@aws-sdk/client-kms') as { __send: jest.Mock }
-  ).__send;
+  return (jest.requireMock('@aws-sdk/client-kms') as { __send: jest.Mock })
+    .__send;
 }
 
 /** A ConfigService that reports KMS as enabled with a CMK id. */
@@ -168,9 +167,9 @@ describe('KmsKeyProvider', () => {
 
       expect(provider.getEncryptionKey()).toBe(plaintext.toString('hex'));
       // The blob is on disk, so the next start can reuse this key.
-      expect(
-        loadPersistedEncryptedDataKey(join(dataKeyDir, 'data-key')),
-      ).toBe(Buffer.from('wrapped-blob').toString('base64'));
+      expect(loadPersistedEncryptedDataKey(join(dataKeyDir, 'data-key'))).toBe(
+        Buffer.from('wrapped-blob').toString('base64'),
+      );
     });
 
     it('reuses the persisted blob instead of generating a new key', async () => {
@@ -182,7 +181,9 @@ describe('KmsKeyProvider', () => {
       );
       process.env.KMS_DATA_KEY_PATH = path;
 
-      kmsSendMock().mockResolvedValue({ Plaintext: Buffer.from(original, 'hex') });
+      kmsSendMock().mockResolvedValue({
+        Plaintext: Buffer.from(original, 'hex'),
+      });
 
       const provider = new KmsKeyProvider(kmsEnabledConfig());
       await provider.onModuleInit();
@@ -251,9 +252,9 @@ describe('KmsKeyProvider', () => {
       const ring = provider.getKeyRing();
       expect(ring.tagWrites).toBe(true);
       expect(ring.currentKeyId).toBe('k2026q1');
-      expect(
-        SecretEncryptionUtil.classify(provider.encrypt('x')),
-      ).toBe('prefixed-aes-v2');
+      expect(SecretEncryptionUtil.classify(provider.encrypt('x'))).toBe(
+        'prefixed-aes-v2',
+      );
     });
   });
 });

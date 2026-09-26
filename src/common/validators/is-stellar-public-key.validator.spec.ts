@@ -58,11 +58,7 @@ describe('IsStellarPublicKey (StrKey checksum audit)', () => {
 
   it.each([
     ['classic Ed25519', VALID, true],
-    [
-      'contract address',
-      StrKey.encodeContract(Buffer.alloc(32, 7)),
-      false,
-    ],
+    ['contract address', StrKey.encodeContract(Buffer.alloc(32, 7)), false],
     [
       'muxed account',
       StrKey.encodeMed25519PublicKey(Buffer.alloc(32, 9), 12345),

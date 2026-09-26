@@ -7,7 +7,7 @@ full endpoint list, see [`api-reference.md`](./api-reference.md).
 
 `/accounts/*` and `/webhooks/*` are authenticated with an API JWT, so an
 abuser needs a credential to generate traffic. `/claims/*` is **not
-authenticated** — the claim token in the request body *is* the credential,
+authenticated** — the claim token in the request body _is_ the credential,
 and it is a bearer secret with no server-side revocation.
 
 That makes the claim routes the highest-value target in the API:
@@ -24,12 +24,12 @@ Both therefore carry an explicit, tighter `@Throttle` limit in
 
 ## The limits
 
-| Route                | Limit | Window | Source                                   |
-| -------------------- | ----- | ------ | ---------------------------------------- |
-| `POST /claims/redeem` | 5     | 60s    | `@Throttle` in `claims.controller.ts`   |
-| `POST /claims/verify` | 10    | 60s    | `@Throttle` in `claims.controller.ts`   |
-| `GET /claims/:id`     | app-wide (`API_RATE_LIMIT`, default 100 / 60s) | 60s | `ThrottlerModule.forRoot` |
-| everything else       | app-wide | 60s | `ThrottlerModule.forRoot` |
+| Route                 | Limit                                          | Window | Source                                |
+| --------------------- | ---------------------------------------------- | ------ | ------------------------------------- |
+| `POST /claims/redeem` | 5                                              | 60s    | `@Throttle` in `claims.controller.ts` |
+| `POST /claims/verify` | 10                                             | 60s    | `@Throttle` in `claims.controller.ts` |
+| `GET /claims/:id`     | app-wide (`API_RATE_LIMIT`, default 100 / 60s) | 60s    | `ThrottlerModule.forRoot`             |
+| everything else       | app-wide                                       | 60s    | `ThrottlerModule.forRoot`             |
 
 The two claim limits are **per-route, not shared**: exhausting
 `/claims/verify` does not throttle `/claims/redeem`, and vice versa.

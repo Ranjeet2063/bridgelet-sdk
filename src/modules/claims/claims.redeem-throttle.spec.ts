@@ -32,17 +32,11 @@ describe('claim route rate limiting', () => {
   let verifyClaimToken: jest.Mock;
 
   beforeEach(async () => {
-    redeemClaim = jest
-      .fn()
-      .mockRejectedValue(new Error('invalid token'));
-    verifyClaimToken = jest
-      .fn()
-      .mockRejectedValue(new Error('invalid token'));
+    redeemClaim = jest.fn().mockRejectedValue(new Error('invalid token'));
+    verifyClaimToken = jest.fn().mockRejectedValue(new Error('invalid token'));
 
     const module: TestingModule = await Test.createTestingModule({
-      imports: [
-        ThrottlerModule.forRoot([{ ttl: 60000, limit: GLOBAL_LIMIT }]),
-      ],
+      imports: [ThrottlerModule.forRoot([{ ttl: 60000, limit: GLOBAL_LIMIT }])],
       controllers: [ClaimsController],
       providers: [
         {

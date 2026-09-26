@@ -2,7 +2,10 @@ import {
   SecretEncryptionUtil,
   type SecretFormat,
 } from './secret-encryption.util.js';
-import { SecretRotationUtil, type SecretKeyRing } from './secret-rotation.util.js';
+import {
+  SecretRotationUtil,
+  type SecretKeyRing,
+} from './secret-rotation.util.js';
 
 const KEY_A = 'a'.repeat(64);
 const KEY_B = 'b'.repeat(64);
@@ -69,7 +72,10 @@ describe('key-id tagged ciphertext (issue #681)', () => {
       const ct = SecretRotationUtil.encrypt(PLAINTEXT, old);
 
       expect(() =>
-        SecretRotationUtil.decrypt(ct, { currentKeyId: 'k2', currentKey: KEY_B }),
+        SecretRotationUtil.decrypt(ct, {
+          currentKeyId: 'k2',
+          currentKey: KEY_B,
+        }),
       ).toThrow(/unknown key id "k1"/);
     });
 
@@ -109,7 +115,10 @@ describe('key-id tagged ciphertext (issue #681)', () => {
     it('fails a v1 row written under a different key', () => {
       const ct = SecretEncryptionUtil.encrypt(PLAINTEXT, KEY_A);
       expect(() =>
-        SecretRotationUtil.decrypt(ct, { currentKeyId: 'k2', currentKey: KEY_B }),
+        SecretRotationUtil.decrypt(ct, {
+          currentKeyId: 'k2',
+          currentKey: KEY_B,
+        }),
       ).toThrow();
     });
 
@@ -164,7 +173,10 @@ describe('reencrypt', () => {
     });
     expect(SecretEncryptionUtil.classify(moved)).toBe('prefixed-aes-v2');
     expect(
-      SecretRotationUtil.decrypt(moved, { currentKeyId: 'k2', currentKey: KEY_B }),
+      SecretRotationUtil.decrypt(moved, {
+        currentKeyId: 'k2',
+        currentKey: KEY_B,
+      }),
     ).toBe(PLAINTEXT);
   });
 
@@ -206,8 +218,7 @@ describe('audit', () => {
 
   it('treats an unprefixed AES row as legacy', () => {
     // The pre-v1 on-disk shape, minus the prefix.
-    const body = `${'0'.repeat(32)}:${'0'.repeat(32)}:${PLAINTEXT
-      .split('')
+    const body = `${'0'.repeat(32)}:${'0'.repeat(32)}:${PLAINTEXT.split('')
       .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
       .join('')}`;
     const result = SecretRotationUtil.audit([body]);

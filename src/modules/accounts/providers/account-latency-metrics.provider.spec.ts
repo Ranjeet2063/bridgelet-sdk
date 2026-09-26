@@ -68,7 +68,15 @@ describe('AccountLatencyMetricsProvider', () => {
       // and alert derived from the scraped series.
       const bounds = histogram().buckets.map((b) => b.le);
       expect(bounds).toEqual([
-        50, 100, 250, 500, 1000, 2500, 5000, 10000, '+Inf',
+        50,
+        100,
+        250,
+        500,
+        1000,
+        2500,
+        5000,
+        10000,
+        '+Inf',
       ]);
     });
 

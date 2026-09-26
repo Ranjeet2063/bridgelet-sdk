@@ -8,13 +8,13 @@ going stale.
 
 ## Cross-reference
 
-| Finding (SECURITY_AUDIT.md)            | Tracking issue                        | Status                 |
-| -------------------------------------- | ------------------------------------- | ---------------------- |
-| Secret-key base64 encryption           | Original flagged issue (pre-existing) | Remediated             |
-| Broader secrets-at-rest audit          | #547                                  | Closed                 |
-| Dependency vulnerability scanning gate | #548                                  | Closed                 |
-| API key rotation/revocation            | #549                                  | Closed                 |
-| Webhook secret encryption-at-rest gap  | #688                                  | Open — in progress     |
+| Finding (SECURITY_AUDIT.md)            | Tracking issue                        | Status             |
+| -------------------------------------- | ------------------------------------- | ------------------ |
+| Secret-key base64 encryption           | Original flagged issue (pre-existing) | Remediated         |
+| Broader secrets-at-rest audit          | #547                                  | Closed             |
+| Dependency vulnerability scanning gate | #548                                  | Closed             |
+| API key rotation/revocation            | #549                                  | Closed             |
+| Webhook secret encryption-at-rest gap  | #688                                  | Open — in progress |
 
 Every row now resolves to a real issue. The previous state of this table listed
 the webhook-secret gap as "Not yet filed", which is precisely the failure mode

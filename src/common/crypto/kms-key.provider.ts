@@ -10,7 +10,10 @@ import {
   loadPersistedEncryptedDataKey,
   persistEncryptedDataKey,
 } from './kms-key-persistence.util.js';
-import { SecretRotationUtil, type SecretKeyRing } from './secret-rotation.util.js';
+import {
+  SecretRotationUtil,
+  type SecretKeyRing,
+} from './secret-rotation.util.js';
 
 /**
  * KmsKeyProvider

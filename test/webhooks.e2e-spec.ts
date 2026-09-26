@@ -105,9 +105,7 @@ describe('Webhooks lifecycle (e2e) [issue #672]', () => {
       req.on('end', () => {
         received.push({
           body: Buffer.concat(chunks).toString('utf8'),
-          signature: req.headers['x-bridgelet-signature'] as
-            | string
-            | undefined,
+          signature: req.headers['x-bridgelet-signature'] as string | undefined,
           event: req.headers['x-bridgelet-event'] as string | undefined,
           contentType: req.headers['content-type'] as string | undefined,
         });
@@ -115,12 +113,16 @@ describe('Webhooks lifecycle (e2e) [issue #672]', () => {
         res.end('{"ok":true}');
       });
     });
-    await new Promise<void>((resolve) => receiver.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) =>
+      receiver.listen(0, '127.0.0.1', resolve),
+    );
     receiverUrl = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}/hooks`;
 
     // ── embedded postgres ───────────────────────────────────────────────────
     const port = await getFreePort();
-    pgDataDir = await mkdtemp(path.join(os.tmpdir(), 'bridgelet-webhooks-e2e-'));
+    pgDataDir = await mkdtemp(
+      path.join(os.tmpdir(), 'bridgelet-webhooks-e2e-'),
+    );
     pg = new EmbeddedPostgres({
       databaseDir: pgDataDir,
       port,
@@ -153,7 +155,9 @@ describe('Webhooks lifecycle (e2e) [issue #672]', () => {
       // The webhooks module itself is NOT stubbed: real controller, real
       // service, real repository, real HTTP delivery.
       .overrideProvider(SweepsService)
-      .useValue({ executeSweep: () => Promise.resolve({ txHash: 'a'.repeat(64) }) })
+      .useValue({
+        executeSweep: () => Promise.resolve({ txHash: 'a'.repeat(64) }),
+      })
       .overrideProvider(SchedulerService)
       .useValue({
         handleCron: () => Promise.resolve(),
@@ -193,7 +197,11 @@ describe('Webhooks lifecycle (e2e) [issue #672]', () => {
 
   beforeEach(async () => {
     if (!ds) throw new Error('DataSource not ready');
-    await ds.getRepository(WebhookDelivery).createQueryBuilder().delete().execute();
+    await ds
+      .getRepository(WebhookDelivery)
+      .createQueryBuilder()
+      .delete()
+      .execute();
     await ds.getRepository(Webhook).createQueryBuilder().delete().execute();
     received.length = 0;
   });
@@ -271,9 +279,7 @@ describe('Webhooks lifecycle (e2e) [issue #672]', () => {
     });
 
     it('rejects unauthenticated access', async () => {
-      await request(getHttpServer())
-        .get('/webhooks')
-        .expect(401);
+      await request(getHttpServer()).get('/webhooks').expect(401);
       await request(getHttpServer())
         .post('/webhooks')
         .send({ url: receiverUrl, events: [EVENT] })

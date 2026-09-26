@@ -29,9 +29,9 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-const pkg = JSON.parse(
-  readFileSync(join(ROOT, 'package.json'), 'utf8'),
-) as { devDependencies: Record<string, string> };
+const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+  devDependencies: Record<string, string>;
+};
 
 const lock = JSON.parse(
   readFileSync(join(ROOT, 'package-lock.json'), 'utf8'),

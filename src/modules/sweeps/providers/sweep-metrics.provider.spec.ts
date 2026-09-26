@@ -23,7 +23,10 @@ describe('SweepMetricsProvider', () => {
     registry = new Registry();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        { provide: SweepMetricsProvider, useFactory: () => new SweepMetricsProvider(registry) },
+        {
+          provide: SweepMetricsProvider,
+          useFactory: () => new SweepMetricsProvider(registry),
+        },
       ],
     }).compile();
     provider = module.get<SweepMetricsProvider>(SweepMetricsProvider);

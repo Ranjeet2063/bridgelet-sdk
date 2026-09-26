@@ -60,9 +60,9 @@ describe('JWT secret rotation grace window (issue #683)', () => {
     it('defaults the previous secret to JWT_SECRET_PREVIOUS', () => {
       process.env.JWT_SECRET_PREVIOUS = PREVIOUS;
       expect(previousJwtSecret()).toBe(PREVIOUS);
-      expect(
-        verifyClaimTokenWithRotation(sign(PREVIOUS), CURRENT),
-      ).toEqual(expect.objectContaining({ type: 'claim' }));
+      expect(verifyClaimTokenWithRotation(sign(PREVIOUS), CURRENT)).toEqual(
+        expect.objectContaining({ type: 'claim' }),
+      );
     });
 
     it('rejects a token signed with an unrelated secret', () => {
@@ -91,11 +91,9 @@ describe('JWT secret rotation grace window (issue #683)', () => {
     it('preserves TokenExpiredError so callers can map it to a 401', () => {
       // Expiry is a distinct, expected outcome and must not be reported as a
       // signature failure just because a rotation window is open.
-      const expired = jwt.sign(
-        { publicKey: 'GABC', type: 'claim' },
-        PREVIOUS,
-        { expiresIn: -60 },
-      );
+      const expired = jwt.sign({ publicKey: 'GABC', type: 'claim' }, PREVIOUS, {
+        expiresIn: -60,
+      });
       let thrown: unknown;
       try {
         verifyClaimTokenWithRotation(expired, CURRENT, PREVIOUS);
@@ -130,11 +128,9 @@ describe('JWT secret rotation grace window (issue #683)', () => {
     });
 
     it('does not accept a previous-secret token that has also expired', () => {
-      const expired = jwt.sign(
-        { publicKey: 'GABC', type: 'claim' },
-        PREVIOUS,
-        { expiresIn: -60 },
-      );
+      const expired = jwt.sign({ publicKey: 'GABC', type: 'claim' }, PREVIOUS, {
+        expiresIn: -60,
+      });
       expect(() =>
         verifyClaimTokenWithRotation(expired, CURRENT, PREVIOUS),
       ).toThrow(TokenExpiredError);
@@ -143,9 +139,7 @@ describe('JWT secret rotation grace window (issue #683)', () => {
 
   describe('verifyWithRotation (JwtService form)', () => {
     const makeService = () => {
-      const verifyAsync = jest
-        .fn()
-        .mockResolvedValue({ type: 'api' });
+      const verifyAsync = jest.fn().mockResolvedValue({ type: 'api' });
       return { verifyAsync } as unknown as Parameters<
         typeof verifyWithRotation
       >[0] & { verifyAsync: jest.Mock };
@@ -174,18 +168,18 @@ describe('JWT secret rotation grace window (issue #683)', () => {
       const service = makeService();
       const original = new JsonWebTokenError('bad');
       service.verifyAsync.mockRejectedValue(original);
-      await expect(
-        verifyWithRotation(service, 'tok', PREVIOUS),
-      ).rejects.toBe(original);
+      await expect(verifyWithRotation(service, 'tok', PREVIOUS)).rejects.toBe(
+        original,
+      );
     });
 
     it('does not retry when no previous secret is configured', async () => {
       const service = makeService();
       const original = new JsonWebTokenError('bad');
       service.verifyAsync.mockRejectedValue(original);
-      await expect(
-        verifyWithRotation(service, 'tok', undefined),
-      ).rejects.toBe(original);
+      await expect(verifyWithRotation(service, 'tok', undefined)).rejects.toBe(
+        original,
+      );
       expect(service.verifyAsync).toHaveBeenCalledTimes(1);
     });
   });

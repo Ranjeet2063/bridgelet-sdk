@@ -31,17 +31,17 @@ An OpenAPI/Swagger UI is also served by the running app (see
 
 ## Authentication
 
-| Route group     | Auth required                                  |
-| --------------- | ---------------------------------------------- |
-| `/accounts/*`   | Yes — `Authorization: Bearer <api JWT>`         |
-| `/webhooks/*`   | Yes — `Authorization: Bearer <api JWT>`         |
-| `/claims/*`     | **No** — the claim token in the body is the credential |
-| `/health`       | No                                             |
+| Route group   | Auth required                                          |
+| ------------- | ------------------------------------------------------ |
+| `/accounts/*` | Yes — `Authorization: Bearer <api JWT>`                |
+| `/webhooks/*` | Yes — `Authorization: Bearer <api JWT>`                |
+| `/claims/*`   | **No** — the claim token in the body is the credential |
+| `/health`     | No                                                     |
 
 The API JWT must carry `type: "api"`. A token minted for a different purpose
 (for example a `type: "claim"` claim token) is rejected with `401`.
 
-`/claims/*` is deliberately unauthenticated: the claim token *is* the bearer
+`/claims/*` is deliberately unauthenticated: the claim token _is_ the bearer
 credential, and those routes are rate limited instead (see
 [Rate limits](#rate-limits)).
 
@@ -65,15 +65,15 @@ token — see [Where the claim token comes from](#where-the-claim-token-comes-fr
 }
 ```
 
-| Field              | Required | Notes                                                        |
-| ------------------ | -------- | ------------------------------------------------------------ |
-| `fundingSource`    | Yes      | Stellar public key funding the account. StrKey-validated.     |
-| `recovery_address` | Yes      | Where funds go if the account expires unclaimed.              |
-| `amount`           | Yes      | Decimal string, 7 decimal places.                             |
-| `asset_code`       | No       | 1–12 uppercase alphanumerics. Use `native` for XLM.           |
-| `asset_issuer`     | No       | Required when `asset_code` is a non-native issued asset.      |
+| Field              | Required | Notes                                                                     |
+| ------------------ | -------- | ------------------------------------------------------------------------- |
+| `fundingSource`    | Yes      | Stellar public key funding the account. StrKey-validated.                 |
+| `recovery_address` | Yes      | Where funds go if the account expires unclaimed.                          |
+| `amount`           | Yes      | Decimal string, 7 decimal places.                                         |
+| `asset_code`       | No       | 1–12 uppercase alphanumerics. Use `native` for XLM.                       |
+| `asset_issuer`     | No       | Required when `asset_code` is a non-native issued asset.                  |
 | `expiresIn`        | No       | Seconds, 1 hour – 30 days. See [`expiresIn`](#createaccountdtoexpiresin). |
-| `metadata`         | No       | Free-form object. Bounded and PII-stripped — see below.      |
+| `metadata`         | No       | Free-form object. Bounded and PII-stripped — see below.                   |
 
 **Response `201`** — [`AccountResponseDto`](../src/modules/accounts/dto/account-response.dto.ts)
 
@@ -130,22 +130,22 @@ Fetch the current lifecycle state of one account.
 
 Admin listing with pagination.
 
-| Query param | Default | Notes                                  |
-| ----------- | ------- | -------------------------------------- |
-| `limit`     | `50`    | Max `100`                              |
-| `offset`    | `0`     | Records to skip                        |
+| Query param | Default | Notes                                                      |
+| ----------- | ------- | ---------------------------------------------------------- |
+| `limit`     | `50`    | Max `100`                                                  |
+| `offset`    | `0`     | Records to skip                                            |
 | `status`    | —       | Filter by [`AccountStatus`](./account-status-reference.md) |
 
 **Response `200`** — `AccountsListResponseDto`
 
 ```json
 {
-  "accounts": [ /* AccountResponseDto[] */ ],
+  "accounts": [/* AccountResponseDto[] */],
   "total": 150
 }
 ```
 
-`total` is the count *before* pagination is applied.
+`total` is the count _before_ pagination is applied.
 
 ### `CreateAccountDto.expiresIn`
 
@@ -289,10 +289,10 @@ in [`webhook-verification.md`](./webhook-verification.md).
 List **active** webhook subscriptions. Soft-deleted and paused subscriptions
 are excluded.
 
-| Query param | Default | Notes             |
-| ----------- | ------- | ----------------- |
-| `limit`     | `50`    | Max `100`         |
-| `offset`    | `0`     | Records to skip   |
+| Query param | Default | Notes           |
+| ----------- | ------- | --------------- |
+| `limit`     | `50`    | Max `100`       |
+| `offset`    | `0`     | Records to skip |
 
 **Response `200`**
 
@@ -330,12 +330,12 @@ Register a subscription.
 }
 ```
 
-| Field         | Required | Notes                                                       |
-| ------------- | -------- | ----------------------------------------------------------- |
-| `url`         | Yes      | Must be `https` and pass SSRF checks (no loopback/private hosts). |
-| `events`      | Yes      | See the [event catalogue](./webhook-events.md).             |
+| Field         | Required | Notes                                                                      |
+| ------------- | -------- | -------------------------------------------------------------------------- |
+| `url`         | Yes      | Must be `https` and pass SSRF checks (no loopback/private hosts).          |
+| `events`      | Yes      | See the [event catalogue](./webhook-events.md).                            |
 | `secret`      | No       | ≥ 16 chars, `[A-Za-z0-9_-]` only. See [Webhook secrets](#webhook-secrets). |
-| `description` | No       | Free text.                                                 |
+| `description` | No       | Free text.                                                                 |
 
 **Response `201`** — `WebhookResponseDto` (never includes `secret`)
 
@@ -422,11 +422,11 @@ All routes sit behind a global throttler (`API_RATE_LIMIT`, default
 route-level limits** because they accept raw bearer tokens and one of them
 moves funds:
 
-| Route               | Limit             | Window | Rationale                                  |
-| ------------------- | ----------------- | ------ | ------------------------------------------ |
-| `POST /claims/verify`  | 10             | 60s    | Probe/endpoint-enumeration guard            |
-| `POST /claims/redeem`  | 5              | 60s    | Bearer-secret brute-force guard             |
-| everything else    | `API_RATE_LIMIT`  | 60s    | App-wide default                            |
+| Route                 | Limit            | Window | Rationale                        |
+| --------------------- | ---------------- | ------ | -------------------------------- |
+| `POST /claims/verify` | 10               | 60s    | Probe/endpoint-enumeration guard |
+| `POST /claims/redeem` | 5                | 60s    | Bearer-secret brute-force guard  |
+| everything else       | `API_RATE_LIMIT` | 60s    | App-wide default                 |
 
 Exceeding a limit returns `429`. The redeem limit is the important one: a claim
 token is a bearer secret, so an attacker who can guess or replay tokens has a

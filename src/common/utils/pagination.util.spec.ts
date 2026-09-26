@@ -68,7 +68,9 @@ describe('parsePagination', () => {
     });
 
     it('names the offending field in the message', () => {
-      expect(() => parsePagination('abc', '0')).toThrow(/limit must be an integer/);
+      expect(() => parsePagination('abc', '0')).toThrow(
+        /limit must be an integer/,
+      );
       expect(() => parsePagination('10', 'abc')).toThrow(
         /offset must be an integer/,
       );
@@ -80,9 +82,9 @@ describe('parsePagination', () => {
     });
 
     it('rejects values beyond safe-integer range', () => {
-      expect(() =>
-        parsePagination('99999999999999999999', '0'),
-      ).toThrow(BadRequestException);
+      expect(() => parsePagination('99999999999999999999', '0')).toThrow(
+        BadRequestException,
+      );
     });
   });
 

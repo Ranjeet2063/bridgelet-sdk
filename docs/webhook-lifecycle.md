@@ -10,8 +10,8 @@ response fields, see [`api-reference.md`](./api-reference.md).
 
 A subscription has one meaningful piece of state: `isActive`.
 
-| `isActive` | Meaning                                                    | Receives deliveries | In `GET /webhooks` |
-| ---------- | ---------------------------------------------------------- | ------------------- | ------------------ |
+| `isActive` | Meaning                                                     | Receives deliveries | In `GET /webhooks` |
+| ---------- | ----------------------------------------------------------- | ------------------- | ------------------ |
 | `true`     | Active                                                      | Yes                 | Yes                |
 | `false`    | Paused (`PUT` with `isActive: false`) or deleted (`DELETE`) | No                  | No                 |
 
@@ -53,12 +53,12 @@ keeps working. This is the intended way to "undelete".
 
 They are the same operation mechanically. Choose based on intent:
 
-| You want to…                          | Use                                       |
-| ------------------------------------- | ----------------------------------------- |
-| Stop deliveries temporarily          | `PUT { "isActive": false }`               |
-| Stop deliveries permanently           | `DELETE /webhooks/:id`                    |
-| Resume after a pause                 | `PUT { "isActive": true }`                |
-| Resume after a delete                 | `PUT { "isActive": true }` — same call    |
+| You want to…                | Use                                    |
+| --------------------------- | -------------------------------------- |
+| Stop deliveries temporarily | `PUT { "isActive": false }`            |
+| Stop deliveries permanently | `DELETE /webhooks/:id`                 |
+| Resume after a pause        | `PUT { "isActive": true }`             |
+| Resume after a delete       | `PUT { "isActive": true }` — same call |
 
 `PUT` is the more descriptive choice for a pause because it leaves an audit
 trail of the intent; `DELETE` is the conventional REST verb for "I am done
