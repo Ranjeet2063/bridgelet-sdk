@@ -26,7 +26,10 @@
     "migration:run": "npm run typeorm -- migration:run -d src/config/typeorm.config.ts",
     "migration:revert": "npm run typeorm -- migration:revert -d src/config/typeorm.config.ts",
     "migration:show": "npm run typeorm -- migration:show -d src/config/typeorm.config.ts",
-    "migrate:secrets": "ts-node --esm src/scripts/migrate-secrets.ts"
+    "migrate:secrets": "ts-node --esm src/scripts/migrate-secrets.ts",
+    "test:mutation": "stryker run",
+    "test:mutation:crypto": "stryker run --mutate \"src/common/crypto/**/*.ts\"",
+    "test:mutation:sweeps": "stryker run --mutate \"src/modules/sweeps/**/*.ts\""
   },
   "dependencies": {
     "@aws-sdk/client-kms": "3.1075.0",
@@ -81,6 +84,8 @@
     "jest": "^29.7.0",
     "prettier": "^3.4.2",
     "source-map-support": "^0.5.21",
+    "stryker-mutator-execution-reporter": "^8.5.0",
+    "stryker-mutator-jest-runner": "^8.5.0",
     "supertest": "^7.0.0",
     "ts-jest": "^29.4.11",
     "ts-loader": "^9.5.2",

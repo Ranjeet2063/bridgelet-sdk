@@ -1,5 +1,8 @@
 # Security
 
+**Last reviewed:** 2026-09-26
+**Next review due:** 2026-12-26 (quarterly — see [Re-audit cadence](#re-audit-cadence))
+
 This document describes how Bridgelet SDK protects sensitive data at rest, in particular the ephemeral Stellar secret keys the service is responsible for custodying between account creation and claim redemption.
 
 ## Ephemeral secret key encryption
@@ -49,6 +52,7 @@ See the header comment in [`src/scripts/migrate-secrets.ts`](src/scripts/migrate
 
 Claim tokens are signed JWTs (`app.jwtSecret`). Only a SHA-256 hash of the token (`claimTokenHash`) is persisted; the raw token is returned to the caller exactly once, in the `create` response's `claimUrl`.
 
+<<<<<<< HEAD
 Because a token cannot be re-issued, rotating `JWT_SECRET` without a grace window invalidates every outstanding token at once and strands the funds behind them. `JWT_SECRET_PREVIOUS` keeps the outgoing secret accepted during a rotation; see [`docs/jwt-secret-rotation-runbook.md`](docs/jwt-secret-rotation-runbook.md).
 
 ## Webhook secrets
@@ -60,6 +64,46 @@ A webhook `secret` is a shared HMAC key: whoever holds it can forge deliveries y
 - **write-only over the API** — `WebhookResponseDto` has no `secret` field, so it cannot be read back through `GET`/`POST`/`PUT`. A lost secret must be rotated, not recovered.
 
 Rows written before encryption was introduced hold a plaintext secret; `WebhooksService.readSecret()` detects that and keeps using them, and they are re-encrypted the next time the secret is rotated.
+
+## Re-audit cadence
+
+`SECURITY.md` and [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md) are point-in-time
+snapshots and go stale if nobody revisits them. The following cadence applies.
+
+- **Quarterly** (next due **2026-12-26**): re-read both documents end to end
+  and update the `Last reviewed` date above. The reviewer must, for every row
+  in `SECURITY_AUDIT.md`, confirm the stated `Status` is still accurate and
+  that any linked issue is still tracked (open or closed) rather than silently
+  dropped.
+- **On any change to the crypto path** — `src/common/crypto/**`,
+  `SecretEncryptionUtil`, `KmsKeyProvider` — re-review immediately rather than
+  waiting for the quarterly pass. These files hold the keys that protect
+  account secret keys, so a change here is itself a review trigger.
+- **On any new sensitive data category** being persisted, add a row to
+  `SECURITY_AUDIT.md` in the same PR that introduces it. A new column holding
+  secret material may not land without a corresponding audit row.
+
+### What "cross-checked against tracked issues" means
+
+The `Status` column in `SECURITY_AUDIT.md` is only trustworthy if each finding
+resolves to something the tracker knows about. The rules, enforced at review
+time and recorded in
+[`docs/security-audit-reconciliation.md`](docs/security-audit-reconciliation.md):
+
+1. Every finding carries a `Status`.
+2. A finding may not be marked `Remediated` without a linked issue that was
+   actually closed.
+3. A finding marked `Gap` must have an open issue filed against it before the
+   next quarterly pass. **This is the check most likely to catch silent
+   rot** — a `Gap` with no issue number means nobody owns the work.
+4. Findings that are intentionally accepted risk (rather than gaps) are marked
+   as such with a rationale, so they are not re-litigated every quarter and not
+   mistaken for unfixed bugs.
+
+The one currently-known `Gap` is the webhook `secret` column, which is tracked
+by issue #688. Until that closes, treat webhook secrets as plaintext at rest
+and avoid treating them as protected with the same guarantees as account
+secret keys.
 
 ## Reporting a vulnerability
 

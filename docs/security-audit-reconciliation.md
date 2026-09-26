@@ -4,15 +4,21 @@
 each finding stays linked to an actively tracked GitHub issue instead of
 going stale.
 
+**Last reconciled:** 2026-09-26 · **Next due:** 2026-12-26
+
 ## Cross-reference
 
 | Finding (SECURITY_AUDIT.md)            | Tracking issue                        | Status                 |
 | -------------------------------------- | ------------------------------------- | ---------------------- |
 | Secret-key base64 encryption           | Original flagged issue (pre-existing) | Remediated             |
-| Broader secrets-at-rest audit          | #547                                  | Closed by this PR      |
-| Dependency vulnerability scanning gate | #548                                  | Closed by this PR      |
-| API key rotation/revocation            | #549                                  | Closed by this PR      |
-| Webhook secret encryption-at-rest gap  | Not yet filed                         | Open — needs new issue |
+| Broader secrets-at-rest audit          | #547                                  | Closed                 |
+| Dependency vulnerability scanning gate | #548                                  | Closed                 |
+| API key rotation/revocation            | #549                                  | Closed                 |
+| Webhook secret encryption-at-rest gap  | #688                                  | Open — in progress     |
+
+Every row now resolves to a real issue. The previous state of this table listed
+the webhook-secret gap as "Not yet filed", which is precisely the failure mode
+the process below is meant to prevent.
 
 ## Process going forward
 
@@ -23,3 +29,6 @@ going stale.
    before the next audit pass, per the table above.
 4. This table is reviewed whenever `SECURITY_AUDIT.md` changes, so findings
    cannot silently go untracked.
+5. Rows whose risk is deliberately accepted (rather than unfixed) say so
+   explicitly, with the reason. Without this, an accepted risk looks
+   indistinguishable from an unfixed gap and gets re-filed every quarter.

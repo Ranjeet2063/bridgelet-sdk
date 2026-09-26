@@ -212,14 +212,21 @@ Once running, access API docs at:
 
 ## Key Endpoints
 
-POST /accounts # Create ephemeral account
+POST /accounts # Create ephemeral account (also returns the claim token)
 GET /accounts/:id # Get account details
-POST /claims/initiate # Generate claim token
-POST /claims/redeem # Redeem claim and sweep
-GET /webhooks # List webhook subscriptions
+GET /accounts # List accounts (admin, paginated)
+POST /claims/verify # Check a claim token is still valid
+POST /claims/redeem # Redeem claim and sweep funds
+GET /claims/:id # Get a recorded claim
+GET /webhooks # List webhook subscriptions (active only, paginated)
 POST /webhooks # Subscribe to events
-PUT /webhooks/:id # Update webhook subscription (e.g. URL, events)
-DELETE /webhooks/:id # Delete webhook subscription
+PUT /webhooks/:id # Update webhook subscription (url, events, isActive, secret)
+DELETE /webhooks/:id # Soft-delete (deactivate) a webhook subscription
+
+Full request/response documentation: [API Reference](./docs/api-reference.md)
+
+> There is no `POST /claims/initiate` endpoint. The claim token is minted by
+> `POST /accounts` and returned once, in that response's `claimUrl`.
 
 ## Database Schema
 

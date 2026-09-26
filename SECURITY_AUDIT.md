@@ -1,22 +1,27 @@
 # Security Audit — Secrets at Rest
 
+**Last reviewed:** 2026-09-26 · **Next review due:** 2026-12-26
+(see the re-audit cadence in [`SECURITY.md`](SECURITY.md))
+
 Inventory of sensitive data categories persisted by this service and their
 current protection level. This supplements the base64-encryption finding
 already tracked for account secret keys.
 
-| Category                    | Where stored                                | Current protection                                               | Status                              |
-| --------------------------- | ------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------- |
-| Stellar account secret keys | `accounts` table, `secret` column           | Envelope-encrypted via `SecretEncryptionUtil` + `KmsKeyProvider` | OK                                  |
-| Claim tokens                | `accounts` table, hashed only               | SHA-256 hash, plaintext never persisted                          | OK                                  |
-| JWT signing secret          | Environment variable (`JWT_SECRET`)         | Not stored in DB; relies on deployment secret manager            | Needs deployment-level confirmation |
-| Database credentials        | Environment variables                       | Not stored in DB or repo; relies on deployment secret manager    | Needs deployment-level confirmation |
-| Webhook secrets             | `webhooks` table, `secret` column           | Stored as-is (no encryption-at-rest confirmed)                   | Gap — see follow-up issue           |
-| API keys (integrators)      | `accounts` table / future `api-keys` module | Rotation/revocation being added (see below)                      | In progress                         |
+| Category                    | Where stored                                | Current protection                                               | Status                                                                 |
+| --------------------------- | ------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Stellar account secret keys | `accounts` table, `secretKeyEncrypted`      | Envelope-encrypted via `SecretEncryptionUtil` + `KmsKeyProvider` | OK                                                                     |
+| Claim tokens                | `accounts` table, `claimTokenHash` only     | SHA-256 hash, plaintext never persisted                          | OK                                                                     |
+| JWT signing secret          | Environment variable (`JWT_SECRET`)         | Not stored in DB; relies on deployment secret manager            | Accepted risk — deployment-level responsibility, not an app gap        |
+| Database credentials        | Environment variables                       | Not stored in DB or repo; relies on deployment secret manager    | Accepted risk — deployment-level responsibility, not an app gap        |
+| Webhook secrets             | `webhooks` table, `secret` column           | Stored as-is (no encryption-at-rest confirmed)                   | Gap — tracked by #688                                                  |
+| API keys (integrators)      | `accounts` table / future `api-keys` module | Rotation/revocation added                                       | Remediated — #549                                                     |
 
 ## Gaps identified
 
 - Webhook `secret` column is not confirmed encrypted at rest, unlike account
-  secret keys. Filed as a follow-up rather than fixed silently here.
+  secret keys. Tracked by **#688**; the `create`/`update` DTOs do enforce
+  strength and format validation (min length, character set), but the value is
+  still persisted as plaintext.
 
 ## Known dependency advisories (baselined, not silently fixed)
 
@@ -35,3 +40,9 @@ dependency bump (some breaking) and should be its own follow-up issue.
 New findings must be appended to this table with a `Status` and, once
 triaged, a linked GitHub issue number (see
 `docs/security-audit-reconciliation.md`).
+
+At each quarterly review, every row above is re-checked against the tracker:
+a `Gap` with no open issue is escalated and filed, and a row may not be marked
+`Remediated` unless its linked issue is actually closed. This is a static
+snapshot by design — the reconciliation doc and the cadence in `SECURITY.md`
+are what keep it from drifting into a document nobody trusts.

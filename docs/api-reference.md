@@ -1,6 +1,151 @@
 # API Reference
 
+Every route the service exposes, with request/response examples. The
+"Key Endpoints" table in [`README.md`](../README.md) is a summary of this
+page; this page is the source of truth.
+
+An OpenAPI/Swagger UI is also served by the running app (see
+[Getting Started](./getting-started.md)).
+
+## Contents
+
+- [Authentication](#authentication)
+- [Accounts](#accounts)
+  - [`POST /accounts`](#post-accounts)
+  - [`GET /accounts/:id`](#get-accountsid)
+  - [`GET /accounts`](#get-accounts)
+  - [`CreateAccountDto.expiresIn`](#createaccountdtoexpiresin)
+- [Claims](#claims)
+  - [`POST /claims/verify`](#post-claimsverify)
+  - [`POST /claims/redeem`](#post-claimsredeem)
+  - [`GET /claims/:id`](#get-claimsid)
+  - [Where the claim token comes from](#where-the-claim-token-comes-from)
+- [Webhooks](#webhooks)
+  - [`GET /webhooks`](#get-webhooks)
+  - [`POST /webhooks`](#post-webhooks)
+  - [`PUT /webhooks/:id`](#put-webhooksid)
+  - [`DELETE /webhooks/:id`](#delete-webhooksid)
+  - [Webhook secrets](#webhook-secrets)
+- [Health](#health)
+- [Errors](#errors)
+
+## Authentication
+
+| Route group     | Auth required                                  |
+| --------------- | ---------------------------------------------- |
+| `/accounts/*`   | Yes — `Authorization: Bearer <api JWT>`         |
+| `/webhooks/*`   | Yes — `Authorization: Bearer <api JWT>`         |
+| `/claims/*`     | **No** — the claim token in the body is the credential |
+| `/health`       | No                                             |
+
+The API JWT must carry `type: "api"`. A token minted for a different purpose
+(for example a `type: "claim"` claim token) is rejected with `401`.
+
+`/claims/*` is deliberately unauthenticated: the claim token *is* the bearer
+credential, and those routes are rate limited instead (see
+[Rate limits](#rate-limits)).
+
 ## Accounts
+
+### `POST /accounts`
+
+Create an ephemeral escrow account. This is the only route that mints a claim
+token — see [Where the claim token comes from](#where-the-claim-token-comes-from).
+
+**Request**
+
+```json
+{
+  "fundingSource": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "recovery_address": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "amount": "100.0000000",
+  "asset_code": "native",
+  "expiresIn": 2592000,
+  "metadata": { "integration_id": "webhook_123" }
+}
+```
+
+| Field              | Required | Notes                                                        |
+| ------------------ | -------- | ------------------------------------------------------------ |
+| `fundingSource`    | Yes      | Stellar public key funding the account. StrKey-validated.     |
+| `recovery_address` | Yes      | Where funds go if the account expires unclaimed.              |
+| `amount`           | Yes      | Decimal string, 7 decimal places.                             |
+| `asset_code`       | No       | 1–12 uppercase alphanumerics. Use `native` for XLM.           |
+| `asset_issuer`     | No       | Required when `asset_code` is a non-native issued asset.      |
+| `expiresIn`        | No       | Seconds, 1 hour – 30 days. See [`expiresIn`](#createaccountdtoexpiresin). |
+| `metadata`         | No       | Free-form object. Bounded and PII-stripped — see below.      |
+
+**Response `201`** — [`AccountResponseDto`](../src/modules/accounts/dto/account-response.dto.ts)
+
+```json
+{
+  "accountId": "550e8400-e29b-41d4-a716-446655440000",
+  "publicKey": "GABCD1234EFGH5678IJKL9012MNOP3456QRST7890UVWX1234YZAB5678",
+  "claimUrl": "https://bridgelet.app/claim/abc123def456",
+  "txHash": "abcd1234efgh5678ijkl9012mnop3456qrst7890uvwx1234yzab5678",
+  "amount": "100.5000000",
+  "asset": "native",
+  "status": "PENDING_CLAIM",
+  "expiresAt": "2026-03-26T10:00:00.000Z",
+  "createdAt": "2026-02-26T10:00:00.000Z",
+  "claimedAt": null,
+  "metadata": { "integration_id": "webhook_123" }
+}
+```
+
+`claimUrl` is returned **exactly once**. Only a SHA-256 hash of the underlying
+claim token is persisted, so it cannot be retrieved later — store it at
+creation time.
+
+The ephemeral account's Stellar **secret key is never returned**. It is
+encrypted at rest and only decrypted in-memory at redemption time.
+
+**Errors:** `400` invalid input · `401` missing/invalid API JWT · `429`
+rate limited
+
+#### `metadata` handling
+
+`metadata` is passed through
+[`sanitizeMetadata`](../src/common/utils/metadata-sanitizer.util.ts) before
+persistence:
+
+- must serialise to **≤ 4096 bytes**;
+- `__proto__`, `constructor` and `prototype` keys are dropped (prototype
+  pollution);
+- keys that look like PII (`email`, `phone`, `ssn`, `dob`, `address`, `name`,
+  `passport`, `taxid`, …) are stripped case-insensitively.
+
+Stripping is silent; exceeding the size limit is a `400`.
+
+### `GET /accounts/:id`
+
+Fetch the current lifecycle state of one account.
+
+**Response `200`** — `AccountResponseDto`, same shape as `POST /accounts`.
+`claimUrl` is `null` once the account has been claimed or expired.
+
+**Errors:** `401` · `404` not found (including soft-deleted accounts)
+
+### `GET /accounts`
+
+Admin listing with pagination.
+
+| Query param | Default | Notes                                  |
+| ----------- | ------- | -------------------------------------- |
+| `limit`     | `50`    | Max `100`                              |
+| `offset`    | `0`     | Records to skip                        |
+| `status`    | —       | Filter by [`AccountStatus`](./account-status-reference.md) |
+
+**Response `200`** — `AccountsListResponseDto`
+
+```json
+{
+  "accounts": [ /* AccountResponseDto[] */ ],
+  "total": 150
+}
+```
+
+`total` is the count *before* pagination is applied.
 
 ### `CreateAccountDto.expiresIn`
 
@@ -26,7 +171,201 @@ time the account is created.
 > removed, this page becomes the single source of truth — keep this doc in
 > sync if the underlying conversion implementation changes.
 
+Note that the account's `expiresAt` and the claim token's own expiry
+(`CLAIM_TOKEN_EXPIRY`, default 30 days) are **independent** clocks. A claim
+token can still be cryptographically valid after its account has expired; in
+that case verification is rejected explicitly rather than failing later in the
+sweep path. See [`expires-at-scope.md`](./expires-at-scope.md).
+
+## Claims
+
+All `/claims/*` routes are unauthenticated and rate limited. See
+[Rate limits](#rate-limits).
+
+### `POST /claims/verify`
+
+Check whether a claim token is still valid and claimable, without moving
+funds. Useful for a "claim page" that should show the amount before the user
+commits.
+
+**Request**
+
+```json
+{ "claimToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." }
+```
+
+**Response `200`**
+
+```json
+{
+  "valid": true,
+  "accountId": "4ebae33b-5b93-424c-858d-d79afc708af5",
+  "amount": "100.0000000",
+  "asset": "native",
+  "expiresAt": "2026-02-21T10:30:00.000Z"
+}
+```
+
+**Errors:** `400` account not funded / still initialising · `401` invalid or
+expired token · `409` already claimed · `429` rate limited
+
+### `POST /claims/redeem`
+
+Sweep the account's funds to `destinationAddress`. **This moves real
+on-chain funds** and is the highest-value route in the API.
+
+**Request**
+
+```json
+{
+  "claimToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "destinationAddress": "GBBD47UZQ5YLQYYTWTCB7X3DUEEVZMDVGFBRNZPMZDWQWKCFN3EOZQKQ"
+}
+```
+
+**Response `201`** — success
+
+```json
+{
+  "success": true,
+  "txHash": "571a84bc59fefb3fd17fe167b9c76286e83c31972649441a2d09da87f5b997a7",
+  "amountSwept": "100.0000000",
+  "asset": "native",
+  "destination": "GBBD47UZQ5YLQYYTWTCB7X3DUEEVZMDVGFBRNZPMZDWQWKCFN3EOZQKQ",
+  "sweptAt": "2026-01-14T17:49:20.265Z"
+}
+```
+
+A `201` with `success: false` and `isPartial: true` means the on-chain
+contract authorised the sweep but the Horizon payment did not settle. The
+account is left in `PARTIAL_SWEEP`; **retry with the same token** and it will
+resume without re-authorising. Do not mint a new account in this state.
+
+Redeeming an already-redeemed token is idempotent and returns the original
+result with `message: "Claim was already redeemed"`.
+
+**Errors:** `400` invalid destination / not yet funded · `401` invalid or
+expired token · `409` already being processed · `429` rate limited
+
+### `GET /claims/:id`
+
+Fetch a recorded claim by its ID.
+
+**Response `200`**
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "accountId": "660e8400-e29b-41d4-a716-446655440000",
+  "destinationAddress": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "amountSwept": "100.0000000",
+  "asset": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "sweepTxHash": "571a84bc59fefb3fd17fe167b9c76286e83c31972649441a2d09da87f5b997a7",
+  "claimedAt": "2026-01-14T17:49:20.265Z"
+}
+```
+
+**Errors:** `404` not found
+
+### Where the claim token comes from
+
+> There is **no `POST /claims/initiate` route.** An earlier version of the
+> README's "Key Endpoints" table listed one; the endpoint does not exist in the
+> codebase and the table has been corrected.
+
+The claim token is minted as a side effect of `POST /accounts` and returned
+once, in that response's `claimUrl`. The end-user presents the token to
+`POST /claims/verify` and `POST /claims/redeem`; the service never re-issues
+it.
+
 ## Webhooks
+
+Event names and payload shapes are catalogued in
+[`webhook-events.md`](./webhook-events.md). Signature verification is covered
+in [`webhook-verification.md`](./webhook-verification.md).
+
+### `GET /webhooks`
+
+List **active** webhook subscriptions. Soft-deleted and paused subscriptions
+are excluded.
+
+| Query param | Default | Notes             |
+| ----------- | ------- | ----------------- |
+| `limit`     | `50`    | Max `100`         |
+| `offset`    | `0`     | Records to skip   |
+
+**Response `200`**
+
+```json
+{
+  "webhooks": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "url": "https://api.example.com/hooks",
+      "events": ["account.created", "sweep.completed"],
+      "isActive": true,
+      "description": "Payroll completion hook",
+      "lastTriggeredAt": "2026-02-26T10:31:00.000Z",
+      "createdAt": "2026-02-26T10:00:00.000Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+`total` is the count of active subscriptions before pagination.
+
+### `POST /webhooks`
+
+Register a subscription.
+
+**Request**
+
+```json
+{
+  "url": "https://api.example.com/hooks",
+  "events": ["account.created", "sweep.completed"],
+  "secret": "my-webhook-secret",
+  "description": "Payroll completion hook"
+}
+```
+
+| Field         | Required | Notes                                                       |
+| ------------- | -------- | ----------------------------------------------------------- |
+| `url`         | Yes      | Must be `https` and pass SSRF checks (no loopback/private hosts). |
+| `events`      | Yes      | See the [event catalogue](./webhook-events.md).             |
+| `secret`      | No       | ≥ 16 chars, `[A-Za-z0-9_-]` only. See [Webhook secrets](#webhook-secrets). |
+| `description` | No       | Free text.                                                 |
+
+**Response `201`** — `WebhookResponseDto` (never includes `secret`)
+
+**Errors:** `400` invalid input / unsafe URL · `401` · `429`
+
+### `PUT /webhooks/:id`
+
+Update a subscription. Every field is optional; omitted fields are left
+unchanged.
+
+**Request** — any subset of:
+
+```json
+{
+  "url": "https://api.example.com/hooks-v2",
+  "events": ["account.created"],
+  "description": "Updated description",
+  "isActive": false,
+  "secret": "a-new-signing-secret-32chars"
+}
+```
+
+`isActive` toggles delivery without deleting the subscription — use it to
+temporarily pause a webhook. `secret` rotates the signing key immediately;
+there is no grace period during which both old and new secrets are accepted,
+so update your verifier in the same deploy.
+
+**Response `200`** — `WebhookResponseDto`
+
+**Errors:** `400` · `401` · `404` unknown id
 
 ### `DELETE /webhooks/:id`
 
@@ -45,5 +384,68 @@ Consequences:
   though its row still exists.
 - Deactivated webhooks stop receiving new deliveries, since
   `triggerEvent()` only queries webhooks with `isActive = true`.
+- To bring a deleted webhook back, `PUT /webhooks/:id` with
+  `{ "isActive": true }`.
 - There is currently no endpoint to hard-delete a webhook row or purge
   its delivery history.
+
+**Response `200`** (empty body)
+
+**Errors:** `401` · `404` unknown id
+
+### Webhook secrets
+
+`secret` is used to compute the `X-Bridgelet-Signature` HMAC on outbound
+deliveries. It is **write-only**:
+
+- it is accepted on create and on update;
+- it is never present in any `WebhookResponseDto`, so it cannot be read back
+  through `GET`/`POST`/`PUT`;
+- if you lose it, rotate it with `PUT /webhooks/:id` — there is no way to
+  recover the current value.
+
+If no secret is set, deliveries are still sent but signed with an empty key.
+Treat those as unverifiable; always set a secret.
+
+See [`webhook-verification.md`](./webhook-verification.md) for a worked
+verification example.
+
+## Health
+
+`GET /health` — unauthenticated liveness/readiness probe. `200` when the
+service is up.
+
+## Rate limits
+
+All routes sit behind a global throttler (`API_RATE_LIMIT`, default
+`100` requests / 60s). Two claim routes carry **explicitly tighter,
+route-level limits** because they accept raw bearer tokens and one of them
+moves funds:
+
+| Route               | Limit             | Window | Rationale                                  |
+| ------------------- | ----------------- | ------ | ------------------------------------------ |
+| `POST /claims/verify`  | 10             | 60s    | Probe/endpoint-enumeration guard            |
+| `POST /claims/redeem`  | 5              | 60s    | Bearer-secret brute-force guard             |
+| everything else    | `API_RATE_LIMIT`  | 60s    | App-wide default                            |
+
+Exceeding a limit returns `429`. The redeem limit is the important one: a claim
+token is a bearer secret, so an attacker who can guess or replay tokens has a
+direct path to on-chain funds. Clients should treat `429` as retryable with
+backoff, and should not retry a redemption more than a handful of times.
+
+## Errors
+
+Errors use the standard Nest shape:
+
+```json
+{
+  "statusCode": 400,
+  "message": "destinationAddress must be a valid Stellar address (starts with G and is 56 characters long)",
+  "error": "Bad Request"
+}
+```
+
+`message` may be an array of strings when multiple validation constraints fail
+on the same field. Every request is assigned an `X-Request-Id` (also echoed in
+the response body by the request-id middleware), which is the identifier to
+quote when reporting a problem.

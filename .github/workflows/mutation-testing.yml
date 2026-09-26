@@ -1,0 +1,55 @@
+name: Mutation testing
+
+# Optional, non-blocking quality gate (issue #675).
+#
+# 80% line/branch coverage does not prove assertions are meaningful — a test can
+# execute a function and assert nothing about it, and coverage still reports the
+# line as covered. Mutation testing closes that gap by rewriting the source
+# (e.g. flipping a comparison, negating a boolean) and requiring the test suite
+# to catch each rewrite.
+#
+# Scoped to the highest-risk directories (secret encryption and the sweep path)
+# because mutation testing is far too slow to run across the whole repository.
+#
+# This workflow deliberately does NOT gate merges: it is `workflow_dispatch`
+# only and reports results without failing the build. The thresholds live in
+# stryker.config.json so the score is visible over time; promoting it to a
+# required check is a follow-up once the score is high enough to hold.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly, so drift is noticed even when nobody touches these paths.
+    - cron: '17 3 * * *'
+  push:
+    branches: ['main']
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutate:
+    name: Stryker (crypto + sweeps)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Unit Tests (baseline)
+        run: npm test
+
+      - name: Run Mutation Testing
+        run: npm run test:mutation
