@@ -117,9 +117,10 @@ describe('StellarService', () => {
       expect(kp1.publicKey()).not.toBe(kp2.publicKey());
     });
 
-    // #654: generateKeypair produces the secret key for an account that holds
+    // #654 / #715: generateKeypair produces the secret key for an account that holds
     // funds, so the entropy source is security-relevant. These guard the chain
-    // documented on StellarService.generateKeypair.
+    // documented on StellarService.generateKeypair (confirming CSPRNG usage and
+    // no Math.random or weaker RNG in the chain).
 
     it('does not use Math.random anywhere in the key-generation path', () => {
       const mathRandom = jest.spyOn(Math, 'random');
