@@ -189,14 +189,20 @@ describe('PaymentMonitorService', () => {
     });
 
     it('skips expired accounts by querying only non-expired ones', async () => {
-      // The repo query includes expiresAt filter; if none returned, Horizon is never called.
-      // Simulate the DB returning zero results (expired accounts are already filtered by the WHERE clause)
+      // Issue #721: the expiresAt predicate is what keeps the poller from
+      // querying Horizon for accounts SchedulerService is about to expire.
+      // Assert the operator itself, not just the status filter — removing it
+      // or inverting it is the regression this test exists to catch.
       accountsRepo.find.mockResolvedValueOnce([]);
       await service.pollAllAccounts();
       expect(accountsRepo.find).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
             status: AccountStatus.PENDING_PAYMENT,
+            expiresAt: expect.objectContaining({
+              type: 'moreThan',
+              value: expect.any(Date),
+            }),
           }),
         }),
       );
