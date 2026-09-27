@@ -102,28 +102,28 @@ describe('SchedulerService', () => {
   // -------------------------------------------------------------------------
 
   describe('onModuleInit / onModuleDestroy', () => {
-    it('starts two setIntervals on init and clears both on destroy', () => {
+    it('starts two interval runners on init and clears both on destroy', () => {
       // Restore the beforeEach no-op spy so we hit the real implementation
       jest.restoreAllMocks();
 
       const handles = [111, 222];
       let callCount = 0;
-      const setIntervalSpy = jest
-        .spyOn(global, 'setInterval')
+      const setTimeoutSpy = jest
+        .spyOn(global, 'setTimeout')
         .mockImplementation(() => handles[callCount++] as any);
-      const clearIntervalSpy = jest
-        .spyOn(global, 'clearInterval')
+      const clearTimeoutSpy = jest
+        .spyOn(global, 'clearTimeout')
         .mockImplementation(() => undefined);
 
       service.onModuleInit();
-      expect(setInterval).toHaveBeenCalledTimes(2);
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(2);
 
       service.onModuleDestroy();
-      expect(clearInterval).toHaveBeenCalledWith(111);
-      expect(clearInterval).toHaveBeenCalledWith(222);
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(111);
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(222);
 
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
     });
   });
 
