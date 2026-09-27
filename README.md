@@ -172,7 +172,7 @@ npm run test:cov
 
 Coverage reports are generated in the `coverage/` directory. The build will fail if any metric (branches, functions, lines, statements) falls below 80%.
 
-The repository also includes an embedded-Postgres integration test in `src/database/migrations.integration.spec.ts` that starts a fresh PostgreSQL instance, runs all current migrations, verifies the resulting schema matches the TypeORM entities, checks the `account_status_enum` values, confirms the `claims.accountId -> accounts.id` and `webhook_deliveries.subscription_id -> webhooks.id` foreign keys are enforced, verifies the high-traffic `accounts` indexes added by migration `1718100006000`, and verifies the `contract_events` table shape.
+The repository also includes an embedded-Postgres integration test in `test/migrations.integration.runner.ts` (`npm run test:migrations`) that starts a fresh PostgreSQL instance, applies all current migrations in their pinned filename order (a reordering fails the run), reports the entity ↔ schema diff and `account_status_enum` values, exercises the `claims.accountId -> accounts.id` and `webhook_deliveries.subscription_id -> webhooks.id` foreign keys, the high-traffic `accounts` indexes added by migration `1718100006000`, and the `contract_events` table shape, then reverts every migration to zero and re-applies them, failing the run if the round trip does not reproduce the original state. It is not part of `npm test` and must be run explicitly.
 
 To check coverage for a specific file:
 

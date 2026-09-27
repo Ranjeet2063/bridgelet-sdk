@@ -28,7 +28,8 @@
     "migration:show": "npm run typeorm -- migration:show -d src/config/typeorm.config.ts",
     "migrate:secrets": "ts-node --esm src/scripts/migrate-secrets.ts",
     "audit:secrets": "ts-node --esm src/scripts/audit-legacy-secret-formats.ts",
-    "check:embedded-postgres-types": "ts-node --esm scripts/check-embedded-postgres-types.ts"
+    "check:embedded-postgres-types": "ts-node --esm scripts/check-embedded-postgres-types.ts",
+    "test:migrations": "node --loader ts-node/esm test/migrations.integration.runner.ts"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "3.1075.0",
