@@ -153,27 +153,27 @@ describe('PaymentMonitorService', () => {
   // -------------------------------------------------------------------------
 
   describe('onModuleInit / onModuleDestroy', () => {
-    it('starts a setInterval on init and clears it on destroy', () => {
+    it('starts an interval runner on init and clears it on destroy', () => {
       onModuleInitSpy.mockRestore();
 
-      const intervalHandle = setInterval(() => undefined, 1_000);
-      clearInterval(intervalHandle);
+      const timeoutHandle = setTimeout(() => undefined, 1_000);
+      clearTimeout(timeoutHandle);
 
-      const setIntervalSpy = jest
-        .spyOn(global, 'setInterval')
-        .mockReturnValue(intervalHandle);
-      const clearIntervalSpy = jest
-        .spyOn(global, 'clearInterval')
+      const setTimeoutSpy = jest
+        .spyOn(global, 'setTimeout')
+        .mockReturnValue(timeoutHandle);
+      const clearTimeoutSpy = jest
+        .spyOn(global, 'clearTimeout')
         .mockImplementation(() => undefined);
 
       service.onModuleInit();
-      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
 
       service.onModuleDestroy();
-      expect(clearIntervalSpy).toHaveBeenCalledWith(intervalHandle);
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(timeoutHandle);
 
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
     });
   });
 
