@@ -537,6 +537,25 @@ describe('StellarService', () => {
         'get_info returned no value',
       );
     });
+
+    it('propagates network failures from simulateTransaction', async () => {
+      sorobanServer.simulateTransaction.mockRejectedValue(
+        new Error('Soroban RPC unavailable'),
+      );
+
+      await expect(service.getAccountInfo(CONTRACT_ID)).rejects.toThrow(
+        'Soroban RPC unavailable',
+      );
+    });
+
+    it('rejects a malformed simulation response without a result', async () => {
+      sorobanServer.simulateTransaction.mockResolvedValue({});
+      jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
+
+      await expect(service.getAccountInfo(CONTRACT_ID)).rejects.toThrow(
+        `get_info returned no value for ${CONTRACT_ID}`,
+      );
+    });
   });
 
   // ── waitForTransaction (via createEphemeralAccount) ─────────────────────────
