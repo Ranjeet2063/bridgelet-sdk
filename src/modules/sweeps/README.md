@@ -219,9 +219,18 @@ Network determines:
    - Clear from memory after use
 
 2. **Authorization Signatures:**
-   - MVP uses dummy signatures
-   - Production must implement proper Ed25519 signing
-   - Use authorized SDK keys
+   - Real Ed25519 signing is implemented (#457). `SweepSignerUtil.sign()`
+     produces a 64-byte signature over
+     `SHA256( destination_xdr ‖ nonce_be_u64 ‖ controller_xdr )`, matching
+     `construct_sweep_message` in bridgelet-core's
+     `contracts/sweep_controller/src/authorization.rs`.
+   - The output is pinned byte-for-byte by
+     `src/common/crypto/sweep-signer.util.spec.ts` against vectors generated
+     by bridgelet-core's own `tools/sweep-signer`, so a change to the wire
+     format in either repo fails CI.
+   - The signing key must be the `authorized_signer` registered in
+     SweepController storage. A development seed is refused in production
+     configurations — see `SweepSigningGuard` (#457).
 
 3. **Transaction Verification:**
    - Always verify transaction success
@@ -237,15 +246,22 @@ Network determines:
 
 ### Short Term
 
-1. **Production Signature Implementation:**
-   - Replace dummy signatures with real Ed25519
-   - Sign with authorized SDK private key
-   - Verify signatures in contract
+1. **On-Chain Authorization Enforcement** (the real remaining gap, #457):
+   - `authorizeSweep()` builds and simulates the `sweep` call but **never
+     submits it**, so no signature reaches the chain and `authorized: true`
+     reflects a successful simulation only. Recording this rather than fixing
+     it — it is a separate, larger change.
+   - On bridgelet-core, `EphemeralAccount::verify_sweep_authorization` is
+     still a stub that ignores its `auth_signature` and relies on
+     `authorized_controller.require_auth()`.
+     `SweepController::verify_sweep_auth` is fully implemented with a real
+     `env.crypto().ed25519_verify`.
 
-2. **On-Chain Authorization Enforcement:**
-   - Submit contract transactions
-   - Enforce authorization on-chain
-   - Store sweep records in contract
+2. **Production Key Management:**
+   - The signing seed is read from the environment; there is no HSM/KMS
+     integration
+   - `SweepSigningGuard` blocks production deployments from using a dev seed
+     until a real key source exists
 
 3. **Enhanced Validation:**
    - Check destination account exists

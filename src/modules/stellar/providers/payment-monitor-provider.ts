@@ -6,6 +6,7 @@ import * as StellarSdk from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar.service.js';
 import { Account } from '../../../modules/accounts/entities/account.entity.js';
 import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
+import { assertValidAccountStatusTransition } from '../../accounts/enums/account-status-transition.util.js';
 
 /**
  * PaymentMonitorProvider - Horizon SSE-based payment detection
@@ -242,16 +243,64 @@ export class PaymentMonitorProvider implements OnModuleDestroy {
   }
 
   private async markAccountPendingClaim(accountId: string): Promise<void> {
-    await this.accountsRepository.update(accountId, {
-      status: AccountStatus.PENDING_CLAIM,
-    });
+    // #445: the write is now *conditional* on the source status, matching
+    // `PaymentMonitorService.processPayment()` in the sibling module. This was
+    // previously unconditional, which created a real self-transition: the SSE
+    // stream stays open after the account reaches PENDING_CLAIM (it is only
+    // closed on a `DuplicateAsset`, which only fires for a repeated *asset*,
+    // not a different one), so a second inbound payment for a different asset
+    // re-entered this method and wrote PENDING_CLAIM over PENDING_CLAIM.
+    //
+    // That matters because the validator denies X -> X, and the correct fix is
+    // to stop emitting the redundant write, not to exempt this call site from
+    // validation: a conditional update is a no-op once the account has moved
+    // on, which is the idempotency the retry concern actually needs.
+    assertValidAccountStatusTransition(
+      AccountStatus.PENDING_PAYMENT,
+      AccountStatus.PENDING_CLAIM,
+      `paymentMonitorProvider.markAccountPendingClaim accountId=${accountId}`,
+    );
+
+    const result = await this.accountsRepository.update(
+      { id: accountId, status: AccountStatus.PENDING_PAYMENT },
+      { status: AccountStatus.PENDING_CLAIM },
+    );
+
+    if (result.affected === 0) {
+      this.logger.debug(
+        `Account ${accountId} was no longer PENDING_PAYMENT; ` +
+          `PENDING_CLAIM write skipped (already advanced by the poller or another stream event)`,
+      );
+      return;
+    }
+
     this.logger.log(`Account ${accountId} status → PENDING_CLAIM`);
   }
 
   private async markAccountFailed(accountId: string): Promise<void> {
-    await this.accountsRepository.update(accountId, {
-      status: AccountStatus.FAILED,
-    });
+    // #445: reached only from the non-retryable contract errors
+    // TooManyPayments / InvalidAmount, on an account this stream has been
+    // watching — i.e. PENDING_PAYMENT. Conditional for the same reason as
+    // above: an unconditional write could clobber an account that had already
+    // advanced to PENDING_CLAIM, moving it *backwards* into FAILED.
+    assertValidAccountStatusTransition(
+      AccountStatus.PENDING_PAYMENT,
+      AccountStatus.FAILED,
+      `paymentMonitorProvider.markAccountFailed accountId=${accountId}`,
+    );
+
+    const result = await this.accountsRepository.update(
+      { id: accountId, status: AccountStatus.PENDING_PAYMENT },
+      { status: AccountStatus.FAILED },
+    );
+
+    if (result.affected === 0) {
+      this.logger.warn(
+        `Account ${accountId} was no longer PENDING_PAYMENT; FAILED write skipped`,
+      );
+      return;
+    }
+
     this.logger.warn(`Account ${accountId} status → FAILED`);
   }
 

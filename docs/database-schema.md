@@ -19,29 +19,110 @@ The current schema is created entirely through the migrations in `src/database/m
 ### Account Status Lifecycle (issue #639)
 
 > Verified for #700 (duplicate of the already-resolved #639, fixed in PR #774).
+>
+> **Enforced in code since #445.** The table below is the single source of
+> truth, not prose: `ACCOUNT_STATUS_TRANSITIONS` in
+> `src/modules/accounts/enums/account-status-transition.util.ts`. Every service
+> that writes `status` asserts against it, and it is typed
+> `Record<AccountStatus, readonly AccountStatus[]>`, so adding a member to
+> `AccountStatus` without deciding its outgoing transitions is a compile
+> error. An invalid transition is rejected with HTTP 409
+> (`errorCode: INVALID_STATUS_TRANSITION`) — 4xx, not 5xx, because it is a
+> logic/caller error.
 
 State transitions driven by `AccountsService`, `ClaimRedemptionProvider`,
-and `SchedulerService`:
+`PaymentMonitorService`, `PaymentMonitorProvider` and `SchedulerService`:
 
 ```
-INITIALIZING --> PENDING_PAYMENT --> PENDING_CLAIM --> CLAIMING --> CLAIMED
-                       |                                  |
-                       v                                  v
-                    EXPIRED                          PARTIAL_SWEEP
-                       ^                              |         |
-                       |                              v         v
-                 (unclaimed timeout)        (retry, skipContractAuth) CLAIMING
-                                                       |
-                                                       v
-                                                    FAILED
+                    INITIALIZING
+                    |         |
+                    v         v
+            PENDING_PAYMENT  FAILED      (creation threw, or
+              |    |    |                  stuck past initializingTimeoutMs)
+              |    |    +----------------> FAILED   (TooManyPayments /
+              |    |                       InvalidAmount from the SSE monitor)
+              |    +----------------> PENDING_CLAIM   (payment detected)
+              v
+        (unclaimed timeout)
+              |
+          PENDING_CLAIM <---------+
+              |                   | rollback
+              v                   |
+           CLAIMING -------------+   (partial retry, skipContractAuth)
+            |   |   |
+            |   |   +----> PARTIAL_SWEEP
+            |   |
+            |   +--------> CLAIMED
+            v
+      (sweep error)
+   rollback to PENDING_CLAIM or PARTIAL_SWEEP
+
+  PARTIAL_SWEEP --retry--> CLAIMING
+
+  CLAIMED, EXPIRED, FAILED are terminal (no outgoing transitions).
+  X -> X is never a valid transition.
 ```
 
 - `INITIALIZING` → `PENDING_PAYMENT`: funding transaction submitted.
-- `PENDING_PAYMENT` / `PENDING_CLAIM` → `EXPIRED`: scheduler expiry job, unclaimed past `expiresAt`.
+- `INITIALIZING` → `FAILED`: `AccountsService.create()`'s `catch`, or
+  `SchedulerService.runInitializingCleanup()` once the row is stuck past
+  `app.initializingTimeoutMs`.
+- `PENDING_PAYMENT` → `PENDING_CLAIM`: payment detected, by either
+  `PaymentMonitorService.processPayment()` (poller) or
+  `PaymentMonitorProvider.markAccountPendingClaim()` (SSE). Both writes are
+  **conditional on the source status**, so they cannot move an account
+  backwards and are a no-op once it has advanced.
+- `PENDING_PAYMENT` → `EXPIRED` / `PENDING_CLAIM` → `EXPIRED`: scheduler expiry
+  job, unclaimed past `expiresAt`.
+- `PENDING_PAYMENT` → `FAILED`: `PaymentMonitorProvider` on the non-retryable
+  contract errors `TooManyPayments` / `InvalidAmount`.
 - `PENDING_CLAIM` / `PARTIAL_SWEEP` → `CLAIMING`: claim redemption acquires the row lock (`ClaimRedemptionProvider.redeemClaim`).
 - `CLAIMING` → `CLAIMED`: sweep + Horizon payment both succeed.
 - `CLAIMING` → `PARTIAL_SWEEP`: contract authorized but the Horizon payment failed; retried with `skipContractAuth=true`.
-- `CLAIMING` → `PENDING_CLAIM` / `PARTIAL_SWEEP` (rollback) → `FAILED`: unrecoverable sweep error on retry.
+- `CLAIMING` → `PENDING_CLAIM` / `PARTIAL_SWEEP` (rollback): an unrecoverable
+  sweep error. The account stays retryable; it is **not** promoted to `FAILED`.
+
+#### Corrections to the previous version of this section (#445)
+
+Building the table from the actual writes rather than from the diagram above
+surfaced three errors in the earlier text. Recording them because this class of
+drift is exactly what the shared validator now prevents:
+
+1. **`CLAIMING` → `FAILED` does not exist.** The previous text described a
+   `CLAIMING` → `PENDING_CLAIM` / `PARTIAL_SWEEP` → `FAILED` chain, implying a
+   failed sweep ends in `FAILED`. It does not: `redeemClaim()`'s `catch`
+   rolls back to `PENDING_CLAIM` (fresh attempt) or `PARTIAL_SWEEP` (retry) and
+   rethrows, leaving the account redeemable. `FAILED` is only ever written
+   from `INITIALIZING` and `PENDING_PAYMENT`.
+2. **`INITIALIZING` → `FAILED` was missing from the diagram**, despite being
+   written in two places.
+3. **`PENDING_PAYMENT` → `FAILED` was missing from the diagram**, written by
+   `PaymentMonitorProvider.markAccountFailed()`.
+
+The old diagram also omitted the two `→ FAILED` edges entirely and drew
+`FAILED` as reachable only from `PARTIAL_SWEEP`, which no code path does.
+
+#### What the validator does and does not guarantee
+
+It is a **development-time guard against logic errors**, not a concurrency
+control. It runs in one process, in memory, immediately before a write; it
+cannot see a concurrent transaction, order two writers, or undo a write. Two
+workers can both read `PENDING_CLAIM`, both validate `PENDING_CLAIM →
+CLAIMING`, and both write.
+
+What actually makes these writes atomic and monotonic is the **conditional
+update** (`update({ id, status: FROM }, { status: TO })`) and the
+**`SELECT … FOR UPDATE` row lock** inside the `dataSource.transaction` blocks
+in `ClaimRedemptionProvider`. The two mechanisms are complementary. When
+adding a status write, assert the transition _and_ decide separately whether
+the write needs a conditional update or a row lock to be correct under
+concurrency.
+
+Because self-transitions are denied, a call site in a `catch` block must not use
+the throwing `assertValidAccountStatusTransition`: it would replace the real
+underlying error with a validation error. `AccountsService.create()`'s failure
+path and `redeemClaim()`'s rollback both use the non-throwing
+`isValidAccountStatusTransition` and log instead.
 
 ## Connection Pool Configuration
 

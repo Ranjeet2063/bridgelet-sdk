@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { StellarService } from '../stellar/stellar.service.js';
 import { Account } from '../accounts/entities/account.entity.js';
 import { AccountStatus } from '../accounts/enums/account-status.enum.js';
+import { assertValidAccountStatusTransition } from '../accounts/enums/account-status-transition.util.js';
 import { WebhooksService } from '../webhooks/webhooks.service.js';
 
 @Injectable()
@@ -117,6 +118,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // #445: runExpiryJob() only selects PENDING_PAYMENT and PENDING_CLAIM
+    // accounts, and both are legal sources for EXPIRED. The validator is
+    // asserted here (rather than trusted) so that if the query is ever widened
+    // to a status that may not expire — e.g. CLAIMING or a terminal one — this
+    // throws instead of silently expiring an in-flight or already-finished
+    // account.
+    assertValidAccountStatusTransition(
+      account.status,
+      AccountStatus.EXPIRED,
+      `schedulerService.expireAccount accountId=${account.id}`,
+    );
+
     const expiredAt = new Date();
     await this.accountsRepository.update(account.id, {
       status: AccountStatus.EXPIRED,
@@ -169,6 +182,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   private async markInitializingFailed(account: Account): Promise<void> {
     try {
+      // #445: the query only selects INITIALIZING accounts, and
+      // INITIALIZING → FAILED is a legal edge. Asserted for the same reason as
+      // the expiry path: a widened query must fail loudly. This throw is
+      // caught and logged by the enclosing try/catch, so a lifecycle bug
+      // surfaces in the logs and via Promise.allSettled rather than aborting
+      // the whole cleanup pass.
+      assertValidAccountStatusTransition(
+        account.status,
+        AccountStatus.FAILED,
+        `schedulerService.markInitializingFailed accountId=${account.id}`,
+      );
+
       // Explicit typed variable avoids TypeORM _QueryDeepPartialEntity inference on jsonb spread
       const metadata: Record<string, any> = {
         ...(account.metadata ?? {}),

@@ -16,7 +16,28 @@ import { Address } from '@stellar/stellar-sdk';
  * Key format: 64-byte hex string (32-byte seed || 32-byte public key),
  * as produced by Stellar Keypair.rawSecretKey() + Keypair.rawPublicKey().
  * Alternatively, supply the raw 32-byte seed as a 64-character hex string.
+ *
+ * Cross-language conformance (#457)
+ * --------------------------------
+ * The byte-exact output of `buildMessage` and `sign` is pinned by
+ * `sweep-signer.util.spec.ts` against vectors produced by bridgelet-core's
+ * own signer, `tools/sweep-signer` (which uses `soroban_sdk::Address::to_xdr()`
+ * and `env.crypto().sha256()` - the same primitives the deployed contract
+ * uses). A change to `construct_sweep_message` in bridgelet-core invalidates
+ * those vectors and they must be regenerated; see the spec for the exact
+ * command.
  */
+
+/**
+ * DER prefix for a PKCS#8-wrapped Ed25519 private key:
+ * SEQUENCE(46) { INTEGER 0, SEQUENCE(6) { OID 1.3.101.112 }, OCTET STRING(32) }.
+ * The 32-byte Ed25519 seed is appended verbatim to this.
+ */
+const PKCS8_ED25519_HEADER = Buffer.from(
+  '302e020100300506032b657004220420',
+  'hex',
+);
+
 export class SweepSignerUtil {
   /**
    * Sign a sweep authorization for the given destination and nonce.
@@ -46,13 +67,23 @@ export class SweepSignerUtil {
       );
     }
 
-    // Node.js crypto supports Ed25519 via createPrivateKey with type 'ed25519'
+    // #457: the raw 32-byte seed is NOT a PKCS#8 document. Passing it
+    // directly to createPrivateKey({format:'der', type:'pkcs8'}) throws
+    // ERR_OSSL_ASN1_TOO_LONG under OpenSSL 3, so `sign()` previously never
+    // produced a signature at all - it only ever failed. Ed25519 PKCS#8 is a
+    // fixed 16-byte header followed by the raw 32-byte seed, so wrap it here
+    // rather than relying on the caller to hand us an already-wrapped key.
+    const pkcs8 = Buffer.concat([PKCS8_ED25519_HEADER, seed]);
+
     const privateKey = crypto.createPrivateKey({
-      key: seed,
+      key: pkcs8,
       format: 'der',
       type: 'pkcs8',
     });
 
+    // Ed25519 is deterministic and signs the raw 32-byte digest (RFC 8032),
+    // which is exactly what env.crypto().ed25519_verify() in bridgelet-core
+    // consumes. `null` algorithm = Ed25519 (unlike ECDSA, no prehash step).
     return crypto.sign(null, message, privateKey);
   }
 

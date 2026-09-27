@@ -1615,4 +1615,61 @@ describe('ContractProvider', () => {
       expect(hash1).toBe(hash2);
     });
   });
+
+  /**
+   * SECTION: Production signing guard (#457 criterion 3)
+   *
+   * `generateAuthSignature()` must refuse to sign when NODE_ENV is
+   * `production`, so a development/test seed cannot be used in a real
+   * deployment. The guard's own semantics (casing, whitespace, unset) are
+   * covered in `sweep-signing-guard.util.spec.ts`; this block asserts the
+   * provider actually calls it, because an unwired guard is a guard that
+   * does not exist.
+   */
+  describe('Sweep signing production guard (#457)', () => {
+    const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+
+    afterEach(() => {
+      if (ORIGINAL_NODE_ENV === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+      }
+    });
+
+    it('refuses to sign when NODE_ENV is production', () => {
+      process.env.NODE_ENV = 'production';
+
+      expect(() => provider.generateAuthSignature(validParams)).toThrow(
+        /Refusing to sign sweep authorizations/,
+      );
+    });
+
+    it('does not sign when the guard refuses, even via authorizeSweep()', async () => {
+      process.env.NODE_ENV = 'production';
+
+      // authorizeSweep() wraps failures in InternalServerErrorException, so the
+      // guard's message survives inside it.
+      await expect(provider.authorizeSweep(validParams)).rejects.toThrow(
+        /Refusing to sign sweep authorizations/,
+      );
+      // The signature must never have reached the contract call.
+      expect(mockContract.call).not.toHaveBeenCalled();
+    });
+
+    it.each(['development', 'test', 'staging'])(
+      'allows signing when NODE_ENV is %p',
+      (nodeEnv) => {
+        process.env.NODE_ENV = nodeEnv;
+
+        expect(() => provider.generateAuthSignature(validParams)).not.toThrow();
+      },
+    );
+
+    it('allows signing when NODE_ENV is unset', () => {
+      delete process.env.NODE_ENV;
+
+      expect(() => provider.generateAuthSignature(validParams)).not.toThrow();
+    });
+  });
 });

@@ -11,6 +11,7 @@ import * as StellarSdk from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar/stellar.service.js';
 import { Account } from '../accounts/entities/account.entity.js';
 import { AccountStatus } from '../accounts/enums/account-status.enum.js';
+import { assertValidAccountStatusTransition } from '../accounts/enums/account-status-transition.util.js';
 
 /**
  * PaymentMonitorService - interval-based payment detection.
@@ -188,6 +189,23 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
         throw err;
       }
     }
+
+    // #445: the conditional update below is the *mechanism* that makes this
+    // safe — it matches on the source status, so it cannot move an account
+    // backwards and is a no-op if the account already moved on. The validator
+    // is the complementary *guard*: it catches "I typed the wrong constant"
+    // at development time. Neither replaces the other — see the design notes in
+    // account-status-transition.util.ts.
+    //
+    // `account.status` is PENDING_PAYMENT: pollAllAccounts() only selects
+    // accounts in that status. Asserting the intended edge explicitly (rather
+    // than trusting the query) is what makes the two mechanisms checkable
+    // against each other.
+    assertValidAccountStatusTransition(
+      AccountStatus.PENDING_PAYMENT,
+      AccountStatus.PENDING_CLAIM,
+      `paymentMonitorService.processPayment accountId=${account.id}`,
+    );
 
     // Atomic: only transition from PENDING_PAYMENT → PENDING_CLAIM, never backwards
     await this.accountsRepository.update(
