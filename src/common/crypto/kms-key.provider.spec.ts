@@ -145,7 +145,11 @@ describe('KmsKeyProvider', () => {
       // correct previous key. Untagged (v1) ciphertexts are only decryptable
       // with the current key (or by calling decryptWithRotation explicitly).
       const previous = 'b'.repeat(64);
-      const old = SecretEncryptionUtil.encryptWithKeyId('OLD_SECRET', previous, 'previous');
+      const old = SecretEncryptionUtil.encryptWithKeyId(
+        'OLD_SECRET',
+        previous,
+        'previous',
+      );
 
       const provider = new KmsKeyProvider({
         getOrThrow: () => FALLBACK_KEY,

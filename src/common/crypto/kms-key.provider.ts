@@ -161,7 +161,8 @@ export class KmsKeyProvider implements OnModuleInit {
       this.plaintextKey = Buffer.from(response.Plaintext).toString('hex');
 
       if (response.CiphertextBlob) {
-        const dataKeyPath = this.configService.get<string>('app.kmsDataKeyPath');
+        const dataKeyPath =
+          this.configService.get<string>('app.kmsDataKeyPath');
         try {
           persistEncryptedDataKey(
             Buffer.from(response.CiphertextBlob).toString('base64'),

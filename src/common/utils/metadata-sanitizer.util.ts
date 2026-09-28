@@ -111,7 +111,8 @@ function sanitiseValue(
   if (proto !== Object.prototype && proto !== null) return undefined;
 
   // Drop objects with custom toJSON to prevent payload smuggling
-  if (typeof (value as Record<string, unknown>).toJSON === 'function') return undefined;
+  if (typeof (value as Record<string, unknown>).toJSON === 'function')
+    return undefined;
 
   const out: Record<string, MetadataValue> = {};
   let kept = 0;

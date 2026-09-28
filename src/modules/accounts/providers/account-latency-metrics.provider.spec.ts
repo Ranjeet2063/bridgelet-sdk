@@ -40,15 +40,11 @@ describe('AccountLatencyMetricsProvider', () => {
       (b) => b.metricName === HISTOGRAM + '_bucket' && b.labels.le === le,
     );
     if (!match) {
-      const available = (
-        await getHistogram()
-      ).values
+      const available = (await getHistogram()).values
         .filter((b) => b.metricName === HISTOGRAM + '_bucket')
         .map((b) => b.labels.le)
         .join(', ');
-      throw new Error(
-        `No Prometheus bucket with le=${le}; got ${available}`,
-      );
+      throw new Error(`No Prometheus bucket with le=${le}; got ${available}`);
     }
     return match.value;
   };
@@ -171,24 +167,27 @@ describe('AccountLatencyMetricsProvider', () => {
       [9_999],
       [10_000],
       [60_000],
-    ])('a single %ims sample lands in the right Prometheus bucket', async (ms) => {
-      provider.record(ms, true);
+    ])(
+      'a single %ims sample lands in the right Prometheus bucket',
+      async (ms) => {
+        provider.record(ms, true);
 
-      const inMemoryCount = provider
-        .getBuckets()
-        .filter((b) => ms <= b.upperBoundMs).length;
-      const { values } = await getHistogram();
-      const prometheusCount = values.filter(
-        (b) =>
-          b.metricName === HISTOGRAM + '_bucket' &&
-          b.labels.le !== '+Inf' &&
-          ms <= (b.labels.le as number),
-      ).length;
+        const inMemoryCount = provider
+          .getBuckets()
+          .filter((b) => ms <= b.upperBoundMs).length;
+        const { values } = await getHistogram();
+        const prometheusCount = values.filter(
+          (b) =>
+            b.metricName === HISTOGRAM + '_bucket' &&
+            b.labels.le !== '+Inf' &&
+            ms <= (b.labels.le as number),
+        ).length;
 
-      expect(prometheusCount).toBe(inMemoryCount);
-      // The sample is counted by every bucket at or above its magnitude.
-      expect(await bucketCount('+Inf')).toBe(1);
-    });
+        expect(prometheusCount).toBe(inMemoryCount);
+        // The sample is counted by every bucket at or above its magnitude.
+        expect(await bucketCount('+Inf')).toBe(1);
+      },
+    );
 
     it('keeps counts cumulative across mixed magnitudes', async () => {
       provider.record(40, true);
