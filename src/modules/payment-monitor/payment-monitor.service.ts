@@ -12,6 +12,7 @@ import { StellarService } from '../stellar/stellar.service.js';
 import { Account } from '../accounts/entities/account.entity.js';
 import { AccountStatus } from '../accounts/enums/account-status.enum.js';
 import { assertValidAccountStatusTransition } from '../accounts/enums/account-status-transition.util.js';
+import { IntervalJobRunner } from '../../common/utils/interval-job-runner.js';
 
 /**
  * PaymentMonitorService - interval-based payment detection.
@@ -57,7 +58,7 @@ import { assertValidAccountStatusTransition } from '../accounts/enums/account-st
 @Injectable()
 export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PaymentMonitorService.name);
-  private intervalHandle: ReturnType<typeof setInterval> | null = null;
+  private pollRunner: IntervalJobRunner | null = null;
   private horizonServer: StellarSdk.Horizon.Server;
 
   constructor(
@@ -72,29 +73,37 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    const intervalMs = this.configService.getOrThrow<number>(
-      'app.paymentPollIntervalMs',
+    const intervalMs = Number(
+      this.configService.getOrThrow<number>('app.paymentPollIntervalMs'),
     );
-    this.intervalHandle = setInterval(
-      () => void this.pollAllAccounts(),
+    this.pollRunner = new IntervalJobRunner({
       intervalMs,
-    );
+      jitterMs: Math.min(Math.floor(intervalMs * 0.1), 5_000),
+      task: () => this.pollAllAccounts(),
+      onError: (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Payment monitor polling failed: ${message}`);
+      },
+    });
+    this.pollRunner.start();
     this.logger.log(
       `Payment monitor polling started (interval: ${intervalMs}ms)`,
     );
   }
 
   onModuleDestroy(): void {
-    if (this.intervalHandle !== null) {
-      clearInterval(this.intervalHandle);
-      this.intervalHandle = null;
-    }
+    this.pollRunner?.stop();
+    this.pollRunner = null;
     this.logger.log('Payment monitor polling stopped');
   }
 
   /**
    * Polls all non-expired PENDING_PAYMENT accounts for inbound Horizon payments.
-   * Per-account failures are isolated — one bad account does not stop the tick.
+   * The `expiresAt: MoreThan(now)` predicate is load-bearing: without it the
+   * poller keeps asking Horizon about accounts whose payment window has closed,
+   * i.e. exactly the rows `SchedulerService.runExpiryJob()` is about to move to
+   * EXPIRED (#721). Per-account failures are isolated — one bad account does
+   * not stop the tick.
    */
   async pollAllAccounts(): Promise<void> {
     const now = new Date();
