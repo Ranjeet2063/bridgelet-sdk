@@ -53,9 +53,9 @@ done
 # Pre-flight: this script deletes and rewrites the entire migrations folder,
 # so any hand-edited or never-committed migration file in it would be
 # silently destroyed. Refuse to run while git reports uncommitted changes
-# in that folder unless --force was explicitly given.
+# in that folder unless --yes is also paired with an explicit --force.
 UNCOMMITTED_MIGRATIONS="$(git -C "$REPO_ROOT" status --porcelain -- "$MIGRATIONS_DIR" 2>/dev/null || true)"
-if [ -n "$UNCOMMITTED_MIGRATIONS" ] && [ "$FORCE_OVERWRITE" != true ]; then
+if [ -n "$UNCOMMITTED_MIGRATIONS" ] && { [ "$AUTO_YES" != true ] || [ "$FORCE_OVERWRITE" != true ]; }; then
   echo "error: uncommitted changes detected in src/database/migrations/:" >&2
   echo "$UNCOMMITTED_MIGRATIONS" | sed 's/^/    /' >&2
   echo "" >&2
@@ -64,8 +64,8 @@ if [ -n "$UNCOMMITTED_MIGRATIONS" ] && [ "$FORCE_OVERWRITE" != true ]; then
   echo "first, or re-run with --yes --force to overwrite them deliberately." >&2
   exit 1
 fi
-if [ -n "$UNCOMMITTED_MIGRATIONS" ] && [ "$FORCE_OVERWRITE" = true ]; then
-  echo "warning: --force given; the following uncommitted changes in" >&2
+if [ -n "$UNCOMMITTED_MIGRATIONS" ] && [ "$AUTO_YES" = true ] && [ "$FORCE_OVERWRITE" = true ]; then
+  echo "warning: --yes --force given; the following uncommitted changes in" >&2
   echo "         src/database/migrations/ will be overwritten:" >&2
   echo "$UNCOMMITTED_MIGRATIONS" | sed 's/^/    /' >&2
 fi

@@ -64,7 +64,7 @@ Ephemeral Stellar secret keys are encrypted at rest with AES-256-GCM (KMS-backed
 - **Framework:** NestJS (Node.js + TypeScript)
 - **Database:** PostgreSQL
 - **ORM:** TypeORM
-- **Blockchain:** Stellar SDK + Soroban RPC
+- **Blockchain:** Stellar SDK (`@stellar/stellar-sdk` pinned to exact version `14.6.1` for reproducibility) + Soroban RPC
 - **API:** REST api
 
 ### Stellar SDK Version

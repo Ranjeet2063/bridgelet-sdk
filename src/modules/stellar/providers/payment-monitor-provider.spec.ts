@@ -394,4 +394,57 @@ describe('PaymentMonitorProvider', () => {
       );
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Horizon paging tokens & multiple inbound payments (#717)
+  // -------------------------------------------------------------------------
+
+  describe('multiple inbound payments with paging tokens (#717)', () => {
+    beforeEach(() => {
+      service.watch(makeAccount());
+    });
+
+    it('processes sequence of payments with paging tokens when an account receives multiple payments before expected one', async () => {
+      // First event: non-payment operation with earlier paging token
+      capturedOnMessage!({
+        ...makePaymentRecord({ paging_token: '1000', amount: '0.0000010' }),
+        type: 'other_op',
+      });
+      await new Promise(setImmediate);
+      expect(stellarService.recordPayment).not.toHaveBeenCalled();
+
+      // Second event: payment not addressed to watched account
+      capturedOnMessage!(
+        makePaymentRecord({
+          paging_token: '1001',
+          to: 'GOTHER',
+          amount: '1.0000000',
+        }),
+      );
+      await new Promise(setImmediate);
+      expect(stellarService.recordPayment).not.toHaveBeenCalled();
+
+      // Third event: expected valid payment with its paging token
+      capturedOnMessage!(
+        makePaymentRecord({
+          paging_token: '1002',
+          amount: '100.0000000',
+        }),
+      );
+      await new Promise(setImmediate);
+
+      expect(stellarService.recordPayment).toHaveBeenCalledTimes(1);
+      expect(stellarService.recordPayment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          contractId: 'CONTRACT123',
+          signerSecret: 'SFUNDING_SECRET',
+          amount: 1_000_000_000n,
+        }),
+      );
+      expect(accountsRepo.update).toHaveBeenCalledWith('acc-uuid-1', {
+        status: AccountStatus.PENDING_CLAIM,
+      });
+      expect(mockCloseStream).toHaveBeenCalledTimes(1);
+    });
+  });
 });

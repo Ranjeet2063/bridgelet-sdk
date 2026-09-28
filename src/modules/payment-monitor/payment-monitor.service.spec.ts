@@ -283,6 +283,124 @@ describe('PaymentMonitorService', () => {
       const result = await service.findInboundPayment(account);
       expect(result).toBeNull();
     });
+
+    // -----------------------------------------------------------------------
+    // Horizon pagination (#717)
+    // -----------------------------------------------------------------------
+
+    it('follows Horizon pagination (page.next()) when matching payment is on a subsequent page', async () => {
+      const account = makeAccount({
+        createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      });
+
+      const expectedPayment = makePaymentRecord({
+        paging_token: '1002',
+        amount: '500.0000000',
+        created_at: '2024-01-01T02:00:00Z',
+      });
+
+      const page2 = {
+        records: [expectedPayment],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue({ records: [] }),
+      };
+
+      const page1 = {
+        records: [
+          // Multiple small payments or operations before account.createdAt on page 1
+          makePaymentRecord({
+            paging_token: '1000',
+            amount: '1.0000000',
+            created_at: '2023-12-31T23:59:59Z',
+          }),
+          makePaymentRecord({
+            paging_token: '1001',
+            amount: '2.0000000',
+            created_at: '2023-12-31T23:59:59Z',
+          }),
+        ],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue(page2),
+      };
+
+      mockCallFn.mockResolvedValueOnce(page1);
+
+      const result = await service.findInboundPayment(account);
+
+      expect(page1.next).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(expectedPayment);
+    });
+
+    it('traverses multiple pages via paging tokens until the expected payment is found', async () => {
+      const account = makeAccount({
+        createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      });
+
+      const expectedPayment = makePaymentRecord({
+        paging_token: '3000',
+        amount: '100.0000000',
+        created_at: '2024-01-01T05:00:00Z',
+      });
+
+      const page3 = {
+        records: [expectedPayment],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue({ records: [] }),
+      };
+
+      const page2 = {
+        records: [
+          makePaymentRecord({
+            paging_token: '2000',
+            to: 'GOTHER_ACCOUNT',
+          }),
+        ],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue(page3),
+      };
+
+      const page1 = {
+        records: [
+          makePaymentRecord({
+            paging_token: '1000',
+            created_at: '2023-12-31T00:00:00Z',
+          }),
+        ],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue(page2),
+      };
+
+      mockCallFn.mockResolvedValueOnce(page1);
+
+      const result = await service.findInboundPayment(account);
+
+      expect(page1.next).toHaveBeenCalledTimes(1);
+      expect(page2.next).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(expectedPayment);
+    });
+
+    it('stops paginating and returns null when page.next() returns empty records', async () => {
+      const account = makeAccount({
+        createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      });
+
+      const page2 = {
+        records: [],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue({ records: [] }),
+      };
+
+      const page1 = {
+        records: [
+          makePaymentRecord({
+            paging_token: '1000',
+            created_at: '2023-12-31T00:00:00Z',
+          }),
+        ],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue(page2),
+      };
+
+      mockCallFn.mockResolvedValueOnce(page1);
+
+      const result = await service.findInboundPayment(account);
+
+      expect(page1.next).toHaveBeenCalledTimes(1);
+      expect(result).toBeNull();
+    });
   });
 
   // -------------------------------------------------------------------------
