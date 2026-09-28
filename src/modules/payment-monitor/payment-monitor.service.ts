@@ -145,7 +145,7 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
   async findInboundPayment(
     account: Account,
   ): Promise<StellarSdk.Horizon.ServerApi.PaymentOperationRecord | null> {
-    const page = await this.horizonServer
+    let page = await this.horizonServer
       .payments()
       .forAccount(account.publicKey)
       .order('asc')
@@ -154,13 +154,26 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
 
     const cutoff = account.createdAt.toISOString();
 
-    for (const record of page.records) {
-      if ((record.type as string) !== 'payment') continue;
-      const payment =
-        record as StellarSdk.Horizon.ServerApi.PaymentOperationRecord;
-      if (payment.to !== account.publicKey) continue;
-      if (payment.created_at < cutoff) continue;
-      return payment;
+    while (page && page.records) {
+      for (const record of page.records) {
+        if ((record.type as string) !== 'payment') continue;
+        const payment =
+          record as StellarSdk.Horizon.ServerApi.PaymentOperationRecord;
+        if (payment.to !== account.publicKey) continue;
+        if (payment.created_at < cutoff) continue;
+        return payment;
+      }
+
+      // Follow Horizon's paging token / next page link if current page had records
+      if (page.records.length > 0 && typeof (page as any).next === 'function') {
+        const nextPage = await (page as any).next();
+        if (!nextPage || !nextPage.records || nextPage.records.length === 0) {
+          break;
+        }
+        page = nextPage;
+      } else {
+        break;
+      }
     }
 
     return null;

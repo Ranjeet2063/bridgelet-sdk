@@ -65,11 +65,12 @@ export class StellarService {
   /**
    * Generates the ephemeral account keypair.
    *
-   * ## Randomness source (audited, #654)
+   * ## Randomness source (audited, #654, #715)
    *
    * This returns the actual secret key for an account that will hold funds, so
-   * the entropy source matters. The full chain, verified against the installed
-   * dependency tree, is:
+   * the entropy source matters. Keypair.random() uses a CSPRNG and no intermediate
+   * helper in this codebase substitutes a weaker RNG. The full chain, verified against
+   * the installed dependency tree, is:
    *
    *   StellarSdk.Keypair.random()                  @stellar/stellar-base
    *     -> ed25519.utils.randomPrivateKey()        @noble/curves/ed25519
