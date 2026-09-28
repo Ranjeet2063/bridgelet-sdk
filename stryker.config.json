@@ -14,7 +14,29 @@
   "testRunner": "jest",
   "jest": {
     "projectType": "custom",
-    "config": "stryker-jest.config.js"
+    "config": {
+      "rootDir": ".",
+      "roots": ["<rootDir>/src", "<rootDir>/scripts"],
+      "testEnvironment": "node",
+      "testRegex": ".*\\.spec\\.ts$",
+      "moduleFileExtensions": ["js", "json", "ts"],
+      "transform": {
+        "^.+\\.(t|j)s$": [
+          "ts-jest",
+          {
+            "tsconfig": {
+              "module": "CommonJS",
+              "moduleResolution": "node16",
+              "resolvePackageJsonExports": false
+            },
+            "isolatedModules": true
+          }
+        ]
+      },
+      "moduleNameMapper": {
+        "^(\\.{1,2}/.*)\\.js$": "$1"
+      }
+    }
   },
   "coverageAnalysis": "perTest",
   "disableTypeChecks": true,
