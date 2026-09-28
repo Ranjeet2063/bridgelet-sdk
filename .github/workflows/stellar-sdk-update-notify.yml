@@ -34,7 +34,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version-file: '.nvmrc'
-          node-version: '20'
+          node-version: '22'
 
       # Low-noise by construction: the script edits one labelled issue in place
       # and performs no write at all when the published version has not changed,
