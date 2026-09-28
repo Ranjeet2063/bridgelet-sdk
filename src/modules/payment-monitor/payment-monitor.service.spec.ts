@@ -309,6 +309,35 @@ describe('PaymentMonitorService', () => {
   // -------------------------------------------------------------------------
 
   describe('failure isolation', () => {
+    it('processes successful accounts in a mixed batch and logs the failed account', async () => {
+      const acc1 = makeAccount({ id: 'a1', publicKey: 'GPK1' });
+      const acc2 = makeAccount({ id: 'a2', publicKey: 'GPK2' });
+      const acc3 = makeAccount({ id: 'a3', publicKey: 'GPK3' });
+      accountsRepo.find.mockResolvedValueOnce([acc1, acc2, acc3]);
+
+      mockCallFn
+        .mockResolvedValueOnce({
+          records: [makePaymentRecord({ to: 'GPK1' })],
+        })
+        .mockRejectedValueOnce(new Error('Horizon unavailable'))
+        .mockResolvedValueOnce({ records: [] });
+      const loggerError = jest
+        .spyOn((service as any).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      await expect(service.pollAllAccounts()).resolves.not.toThrow();
+
+      expect(mockPaymentsBuilder.forAccount).toHaveBeenCalledTimes(3);
+      expect(stellarService.recordPayment).toHaveBeenCalledTimes(1);
+      expect(accountsRepo.update).toHaveBeenCalledWith(
+        { id: 'a1', status: AccountStatus.PENDING_PAYMENT },
+        { status: AccountStatus.PENDING_CLAIM },
+      );
+      expect(loggerError).toHaveBeenCalledWith(
+        'Poll tick failed for account a2 (GPK2): Horizon unavailable',
+      );
+    });
+
     it('continues polling other accounts when one Horizon call fails', async () => {
       const acc1 = makeAccount({ id: 'a1', publicKey: 'GPK1' });
       const acc2 = makeAccount({ id: 'a2', publicKey: 'GPK2' });
