@@ -78,10 +78,18 @@ export class Account {
   @Column({ type: 'timestamp', nullable: true })
   claimedAt: Date | null;
 
-  // Then wherever your expiry flow sets account status to EXPIRED (likely in the sweeps or a scheduler module once built), ensure this is also set:
-  // account.status = AccountStatus.EXPIRED;
-  // account.expiredAt = new Date();
-  // await this.accountsRepository.save(account);
+  // #445: the commented-out `EXPIRED` status write that used to live here is
+  // removed. It was a leftover note to a future author from before any expiry
+  // flow existed, and it is now actively wrong on two counts:
+  //   1. The status write already exists in `SchedulerService.expireAccount()`,
+  //      and it is validated against ACCOUNT_STATUS_TRANSITIONS. Duplicating
+  //      the note here invited a second, unvalidated copy of the write.
+  //   2. `status` and `expiredAt` are two separate columns. An entity
+  //      "helper" that set both would have to be an atomic operation, and an
+  //      entity is the wrong place for it — `SchedulerService` sets them
+  //      together in a single `update()`.
+  // See docs/database-schema.md for the PENDING_PAYMENT/PENDING_CLAIM -> EXPIRED
+  // transitions and their terminal-state rules.
   @Column({ type: 'timestamp', nullable: true })
   expiredAt: Date | null; // Actual time expiry was processed - set by the expiry handler, null until then
 
