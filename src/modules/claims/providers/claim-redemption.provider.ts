@@ -1,11 +1,12 @@
 import {
   Injectable,
   BadRequestException,
-  Logger,
   ConflictException,
+  UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, EntityManager } from 'typeorm';
+import { IsNull, Repository, DataSource, EntityManager } from 'typeorm';
 import * as crypto from 'crypto';
 import { Claim } from '../entities/claim.entity.js';
 import { Account } from '../../accounts/entities/account.entity.js';
@@ -13,6 +14,10 @@ import { ClaimRedemptionResponseDto } from '../dto/claim-redemption-response.dto
 import { SweepsService } from '../../sweeps/sweeps.service.js';
 import { TokenVerificationProvider } from './token-verification.provider.js';
 import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
+import {
+  assertValidAccountStatusTransition,
+  isValidAccountStatusTransition,
+} from '../../accounts/enums/account-status-transition.util.js';
 import { SecretEncryptionUtil } from '../../../common/crypto/secret-encryption.util.js';
 import { KmsKeyProvider } from '../../../common/crypto/kms-key.provider.js';
 import { ConfigService } from '@nestjs/config';
@@ -54,7 +59,7 @@ export class ClaimRedemptionProvider {
     } catch (error) {
       if (error instanceof ConflictException) {
         const claimedAccount = await this.accountsRepository.findOne({
-          where: { claimTokenHash: tokenHash },
+          where: { claimTokenHash: tokenHash, deletedAt: IsNull() },
         });
         if (claimedAccount) {
           const existingClaim = await this.claimsRepository.findOne({
@@ -93,6 +98,22 @@ export class ClaimRedemptionProvider {
           throw new BadRequestException('Invalid or expired claim token');
         }
 
+        // Defence in depth on account expiry (issue #687). The scheduler is
+        // what normally moves an account to EXPIRED, so there is a window
+        // between `expiresAt` passing and the status flipping. Verifying the
+        // token up front catches the common case, but this locked read is a
+        // separate query and must not rely on that check having happened.
+        // Without it, a claim arriving in that window would attempt a sweep
+        // of an account the contract has already expired.
+        if (new Date() > locked.expiresAt) {
+          this.logger.warn(
+            `Refusing redemption for account ${locked.id}: expired at ${locked.expiresAt.toISOString()}`,
+          );
+          throw new UnauthorizedException(
+            'Claim token has expired: the account expired before it was claimed',
+          );
+        }
+
         if (locked.status === AccountStatus.CLAIMED) {
           return { locked, wasPartialOnEntry: false };
         }
@@ -114,6 +135,24 @@ export class ClaimRedemptionProvider {
         }
 
         const wasPartial = locked.status === AccountStatus.PARTIAL_SWEEP;
+
+        // #445: both PENDING_CLAIM → CLAIMING and PARTIAL_SWEEP → CLAIMING are
+        // legal (the status check above admits exactly those two), so this
+        // cannot throw for a legitimate redemption. Asserting it here — inside
+        // the transaction, right after the row lock is held and right before
+        // the write — is the point where the source status is provably the
+        // locked one.
+        //
+        // Read the "what does and does not guarantee" note in
+        // account-status-transition.util.ts: the row lock plus this
+        // transaction are what make the redemption atomic. The validator is
+        // only the second line that catches a logic error.
+        assertValidAccountStatusTransition(
+          locked.status,
+          AccountStatus.CLAIMING,
+          `claimRedemption.redeemClaim accountId=${locked.id}`,
+        );
+
         locked.status = AccountStatus.CLAIMING;
         locked.destinationAddress = destinationAddress;
         await manager.save(locked);
@@ -164,6 +203,16 @@ export class ClaimRedemptionProvider {
       // (with skipContractAuth=true). Surface this as a non-error response
       // (status=200, success=false, isPartial=true) so callers can decide.
       if (sweepResult.isPartial) {
+        // #445: CLAIMING → PARTIAL_SWEEP. Asserted for completeness; the
+        // account is CLAIMING here by construction (it was set inside the
+        // locked transaction above and nothing else has touched it since,
+        // because the sweep ran outside any competing lock).
+        assertValidAccountStatusTransition(
+          account.status,
+          AccountStatus.PARTIAL_SWEEP,
+          `claimRedemption.redeemClaim (isPartial) accountId=${account.id}`,
+        );
+
         await this.accountsRepository.update(account.id, {
           status: AccountStatus.PARTIAL_SWEEP,
           destinationAddress: '',
@@ -204,6 +253,14 @@ export class ClaimRedemptionProvider {
       // Atomically record the claim and mark account as CLAIMED
       const claim = await this.dataSource.transaction(
         async (manager: EntityManager) => {
+          // #445: CLAIMING → CLAIMED, asserted inside the same transaction
+          // that performs the write so the two cannot drift apart.
+          assertValidAccountStatusTransition(
+            account.status,
+            AccountStatus.CLAIMED,
+            `claimRedemption.redeemClaim (success) accountId=${account.id}`,
+          );
+
           account.status = AccountStatus.CLAIMED;
           account.claimedAt = new Date();
           await manager.save(account);
@@ -256,6 +313,21 @@ export class ClaimRedemptionProvider {
       const revertStatus = wasPartialOnEntry
         ? AccountStatus.PARTIAL_SWEEP
         : AccountStatus.PENDING_CLAIM;
+
+      // #445: deliberately the *non-throwing* validator. This is a `catch`
+      // block handling an unrelated sweep failure; throwing here would replace
+      // the real error with a status-transition error, so the caller and the
+      // audit trail would lose the actual cause. Both rollback targets are
+      // legal from CLAIMING, so this should never fire — but if it does it is
+      // a lifecycle bug worth logging loudly, and the rollback is still
+      // attempted (leaving an account stuck in CLAIMING would be worse).
+      if (!isValidAccountStatusTransition(account.status, revertStatus)) {
+        this.logger.error(
+          `Lifecycle bug (#445): rollback ${account.status} -> ${revertStatus} ` +
+            `is not a valid transition for account ${account.id}. Rolling back anyway.`,
+        );
+      }
+
       await this.accountsRepository.update(account.id, {
         status: revertStatus,
         destinationAddress: '',

@@ -2,8 +2,9 @@ import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { CreateAccountDto } from './create-account.dto.js';
 
-// Precisely sized Stellar public keys: G + 55 uppercase alphanumeric chars = 56 total
-const VALID_KEY = 'G' + 'A'.repeat(55); // 56 chars  ✓
+// A real Ed25519 Stellar public key (valid StrKey checksum), plus
+// deliberately mis-sized variants for the length-boundary tests below.
+const VALID_KEY = 'GDV3BRGE2BXK5JMGAEDGE5QWAY2DBK5V2KEG762Y5GH4LPC5RSPRPTTJ'; // 56 chars  ✓
 const SHORT_KEY = 'G' + 'A'.repeat(54); // 55 chars  ✗
 const LONG_KEY = 'G' + 'A'.repeat(56); // 57 chars  ✗
 
@@ -181,5 +182,34 @@ describe('CreateAccountDto — asset_issuer', () => {
       asset_issuer: undefined,
     });
     expect(errors).not.toContain('asset_issuer');
+  });
+});
+
+// ─── asset_code / asset_issuer combinations ────────────────────────────────
+// Verified for #699 (duplicate of the already-resolved #638, fixed in PR #771).
+// asset_issuer's @ValidateIf only requires it when asset_code is set, so:
+// - asset_code alone correctly fails validation (asset_issuer required) —
+//   AccountsService.create() would otherwise fall back to `asset_code` as a
+//   bare string with no issuer.
+// - asset_issuer alone passes validation untouched (the actual gap):
+//   AccountsService.create() then falls back to `asset_code ?? 'native'`,
+//   silently dropping the issuer entirely.
+describe('CreateAccountDto — asset_code/asset_issuer combination', () => {
+  it('does not flag asset_issuer when asset_code is missing (silently dropped later)', async () => {
+    const errors = await errorsFor({
+      asset_code: undefined,
+      asset_issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+    });
+    expect(errors).not.toContain('asset_issuer');
+    expect(errors).not.toContain('asset_code');
+  });
+
+  it('flags asset_issuer as required when asset_code is provided alone', async () => {
+    const errors = await errorsFor({
+      asset_code: 'USDC',
+      asset_issuer: undefined,
+    });
+    expect(errors).not.toContain('asset_code');
+    expect(errors).toContain('asset_issuer');
   });
 });

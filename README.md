@@ -4,7 +4,6 @@
 
 **MVP Stubs**
 
-> 🚧 **MVP — Active Development:** encryptSecret() — base64, not real encryption, must be replaced before any production deployment
 > 🚧 **The expiresIn → expiry_ledger conversion** — needs verification or explicit documentation of where it happens
 > 🚧 **Webhook coverage gaps**
 
@@ -36,18 +35,12 @@ The following services/imports are currently **commented out** to allow `npm run
 
 1. Search the codebase for comments containing `TEMPORARY:` to locate all commented-out code that needs restoration..
 
-2. **Secret Encryption** (`src/modules/accounts/accounts.service.ts`)
-   - **Current:** Base64 encoding (NOT encryption)
-   - **Impact:** Ephemeral secret keys are not protected at rest
-   - **Required:** AES-256-GCM or KMS-backed encryption before any deployment
-     with real funds
-
-3. **Ledger Expiry Conversion**
+2. **Ledger Expiry Conversion**
    - `CreateAccountDto.expiresIn` (seconds) is not yet converted to
      `expiry_ledger` (u32 ledger sequence) required by the contract
    - `expiresAt` Date is currently unused in `StellarService`
    - Conversion formula: `current_ledger + (expiresIn / 5)`
-4. **Sweep Authorization Signature** (`src/modules/sweeps/providers/contract.provider.ts`)
+3. **Sweep Authorization Signature** (`src/modules/sweeps/providers/contract.provider.ts`)
    - **Current:** `generateAuthSignature()` produces a fake 64-byte stub signature
    - **Works because:** `EphemeralAccount.verify_sweep_authorization()` in `bridgelet-core`
      is also a stub that accepts any signature (documented in bridgelet-core README)
@@ -62,13 +55,37 @@ This is a **temporary stabilization** to enable local development and onboarding
 
 ---
 
+## Security
+
+Ephemeral Stellar secret keys are encrypted at rest with AES-256-GCM (KMS-backed envelope encryption in production). See [SECURITY.md](SECURITY.md) for the full encryption, key-management, and legacy-data-migration details.
+
 ## Tech Stack
 
 - **Framework:** NestJS (Node.js + TypeScript)
 - **Database:** PostgreSQL
 - **ORM:** TypeORM
-- **Blockchain:** Stellar SDK + Soroban RPC
+- **Blockchain:** Stellar SDK (`@stellar/stellar-sdk` pinned to exact version `14.6.1` for reproducibility) + Soroban RPC
 - **API:** REST api
+
+### Stellar SDK Version
+
+`@stellar/stellar-sdk` is pinned to an **exact version** (`14.6.1`) in `package.json` — no caret or tilde range. Do not "fix" this into `^14.6.1` (issue #446, originally pinned in #213):
+
+- The SDK exposes raw Stellar XDR and Soroban ScVal types. A minor or patch bump can change serialization behaviour — transaction building, `Address.toScVal().toXDR()` output, the sweep-authorization message preimage — and break contract calls in ways that only show up against a live network, not in unit tests.
+- An exact pin makes the dependency tree reproducible across developer machines and CI without relying on the lockfile being regenerated in lockstep with `package.json`.
+- A caret range does not just risk drift, it _hides_ it: `^14.6.1` silently admits `14.9.0`, so a routine `npm install` can change the bytes this service signs and submits without any commit touching the version.
+
+**Upgrade process** (manual, by hand — nothing upgrades the pin for you):
+
+1. Update the version in `package.json` to the new exact version.
+2. Run `npm install` to update `package-lock.json`.
+3. Run the full test suite: `npm test`.
+4. Manually test account creation, claim/redemption, sweep and expiry flows against **testnet** before merging.
+5. Only promote to production after all testnet checks pass.
+
+**Automated check.** `npm run check:stellar-sdk-pin` fails if `@stellar/stellar-sdk` is declared as anything other than an exact version — a caret, tilde, comparison range, wildcard, dist-tag, partial version, or a missing/empty value. It runs as its own named step in [CI](.github/workflows/ci.yml) ("Verify @stellar/stellar-sdk is pinned to an exact version") so a PR that loosens the pin is rejected with an explanation rather than a bare lint warning.
+
+**Upgrade notification.** [.github/workflows/stellar-sdk-update-notify.yml](.github/workflows/stellar-sdk-update-notify.yml) runs weekly, compares the pin against the version npm publishes as `latest`, and keeps a single tracking issue (label `dependency-update`) up to date. It never upgrades anything, cannot fail a build, and stays silent on the weeks when nothing has changed.
 
 ## Features
 
@@ -139,7 +156,17 @@ npm run start:dev
 
 # Same, but skip the confirmation prompt (useful in CI)
 ./scripts/generate-migrations.sh --yes
+
+# Skip the prompt AND overwrite uncommitted changes in the migrations folder
+# (only needed when you deliberately want to discard hand-edited migrations)
+./scripts/generate-migrations.sh --yes --force
 ```
+
+Before deleting anything, the script runs a pre-flight `git status --porcelain` check
+against `src/database/migrations/` and aborts if it finds uncommitted changes there
+(modified, staged, or untracked files) — the rewrite would otherwise silently destroy
+them. Commit or stash your migration work first, or pair `--yes` with `--force` to
+overwrite deliberately.
 
 This does **not** apply migrations to a database — it only (re)writes the `.ts` files. Run `npm run migration:run` afterwards as usual. See [`CONTRIBUTING.md`](./CONTRIBUTING.md#database-migrations) for the workflow to follow when adding a _new_ migration.
 
@@ -165,7 +192,7 @@ npm run test:cov
 
 Coverage reports are generated in the `coverage/` directory. The build will fail if any metric (branches, functions, lines, statements) falls below 80%.
 
-The repository also includes an embedded-Postgres integration test in `src/database/migrations.integration.spec.ts` that starts a fresh PostgreSQL instance, runs all current migrations, verifies the resulting schema matches the TypeORM entities, checks the `account_status_enum` values, confirms the `claims.accountId -> accounts.id` and `webhook_deliveries.subscription_id -> webhooks.id` foreign keys are enforced, verifies the high-traffic `accounts` indexes added by migration `1718100006000`, and verifies the `contract_events` table shape.
+The repository also includes an embedded-Postgres integration test in `test/migrations.integration.runner.ts` (`npm run test:migrations`) that starts a fresh PostgreSQL instance, applies all current migrations in their pinned filename order (a reordering fails the run), reports the entity ↔ schema diff and `account_status_enum` values, exercises the `claims.accountId -> accounts.id` and `webhook_deliveries.subscription_id -> webhooks.id` foreign keys, the high-traffic `accounts` indexes added by migration `1718100006000`, and the `contract_events` table shape, then reverts every migration to zero and re-applies them, failing the run if the round trip does not reproduce the original state. It is not part of `npm test` and must be run explicitly.
 
 To check coverage for a specific file:
 
@@ -205,14 +232,21 @@ Once running, access API docs at:
 
 ## Key Endpoints
 
-POST /accounts # Create ephemeral account
+POST /accounts # Create ephemeral account (also returns the claim token)
 GET /accounts/:id # Get account details
-POST /claims/initiate # Generate claim token
-POST /claims/redeem # Redeem claim and sweep
-GET /webhooks # List webhook subscriptions
+GET /accounts # List accounts (admin, paginated)
+POST /claims/verify # Check a claim token is still valid
+POST /claims/redeem # Redeem claim and sweep funds
+GET /claims/:id # Get a recorded claim
+GET /webhooks # List webhook subscriptions (active only, paginated)
 POST /webhooks # Subscribe to events
-PUT /webhooks/:id # Update webhook subscription (e.g. URL, events)
-DELETE /webhooks/:id # Delete webhook subscription
+PUT /webhooks/:id # Update webhook subscription (url, events, isActive, secret)
+DELETE /webhooks/:id # Soft-delete (deactivate) a webhook subscription
+
+Full request/response documentation: [API Reference](./docs/api-reference.md)
+
+> There is no `POST /claims/initiate` endpoint. The claim token is minted by
+> `POST /accounts` and returned once, in that response's `claimUrl`.
 
 ## Database Schema
 
@@ -308,11 +342,11 @@ See [Deployment Guide](./docs/deployment.md) for production setup.
 
 Visit http://localhost:3000/api/docs for API documentation.
 
-See [Getting Started Guide](../docs/getting-started.pdf) for full setup instructions.
+See [Getting Started Guide](./docs/getting-started.md) for full setup instructions.
 
 ## Support
 
-(Nest)[https://nestjs.com](https://nestjs.com/)
+[NestJS](https://nestjs.com)
 
 ## License
 

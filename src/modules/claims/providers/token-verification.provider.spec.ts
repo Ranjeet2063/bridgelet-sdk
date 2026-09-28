@@ -7,6 +7,7 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
+import { IsNull } from 'typeorm';
 import { TokenVerificationProvider } from './token-verification.provider.js';
 import { Account } from '../../accounts/entities/account.entity.js';
 import jwt from 'jsonwebtoken';
@@ -111,7 +112,7 @@ describe('TokenVerificationProvider', () => {
       });
       expect(jwt.verify).toHaveBeenCalledWith(validToken, 'test-secret');
       expect(mockAccountRepository.findOne).toHaveBeenCalledWith({
-        where: { claimTokenHash: expect.any(String) },
+        where: { claimTokenHash: expect.any(String), deletedAt: IsNull() },
       });
     });
 

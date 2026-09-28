@@ -11,6 +11,7 @@ import {
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsStellarPublicKey } from '../../../common/validators/is-stellar-public-key.validator.js';
+import { IsBoundedMetadata } from '../../../common/validators/is-bounded-metadata.validator.js';
 
 // 'native' should be added to regex in the future.
 const ASSET_CODE_REGEX = /^[A-Z0-9]{1,12}$/;
@@ -86,5 +87,6 @@ export class CreateAccountDto {
   @ApiProperty({ example: { userId: 'user_123' }, required: false })
   @IsOptional()
   @IsObject()
+  @IsBoundedMetadata()
   metadata?: Record<string, any>;
 }

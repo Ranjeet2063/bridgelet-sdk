@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { StrKey } from '@stellar/stellar-sdk';
 import { StellarAddressValidator } from './stellar-address.validator.js';
 
 describe('StellarAddressValidator', () => {
@@ -35,6 +36,67 @@ describe('StellarAddressValidator', () => {
     it('should return false for undefined or null inputs', () => {
       expect(isValidLoose(undefined)).toBe(false);
       expect(isValidLoose(null)).toBe(false);
+    });
+  });
+
+  // ── optional StrKey encodings (issue #671) ─────────────────────────────────
+
+  describe('optional StrKey encodings', () => {
+    // Contract addresses and muxed accounts are rejected under the strict
+    // defaults, because the signing/sweep path only ever handles classic
+    // Ed25519 account IDs.
+    const contractAddress = StrKey.encodeContract(Buffer.alloc(32, 7));
+    const muxedAccount = StrKey.encodeMed25519PublicKey(
+      Buffer.alloc(32, 9),
+      12345,
+    );
+
+    it('rejects a contract address by default', () => {
+      expect(StellarAddressValidator.isValid(contractAddress)).toBe(false);
+    });
+
+    it('accepts a contract address when allowContractAddress is set', () => {
+      expect(
+        StellarAddressValidator.isValid(contractAddress, {
+          allowContractAddress: true,
+        }),
+      ).toBe(true);
+    });
+
+    it('rejects a muxed account by default', () => {
+      expect(StellarAddressValidator.isValid(muxedAccount)).toBe(false);
+    });
+
+    it('accepts a muxed account when allowMuxedAccount is set', () => {
+      expect(
+        StellarAddressValidator.isValid(muxedAccount, {
+          allowMuxedAccount: true,
+        }),
+      ).toBe(true);
+    });
+
+    it('does not let one option leak into the other encoding', () => {
+      expect(
+        StellarAddressValidator.isValid(muxedAccount, {
+          allowContractAddress: true,
+        }),
+      ).toBe(false);
+      expect(
+        StellarAddressValidator.isValid(contractAddress, {
+          allowMuxedAccount: true,
+        }),
+      ).toBe(false);
+    });
+
+    it('assertValid honours the same options', () => {
+      expect(() =>
+        StellarAddressValidator.assertValid(contractAddress, {
+          allowContractAddress: true,
+        }),
+      ).not.toThrow();
+      expect(() =>
+        StellarAddressValidator.assertValid(contractAddress),
+      ).toThrow(BadRequestException);
     });
   });
 

@@ -38,6 +38,7 @@ const mockConfigService = {
       'stellar.encryptionKey': 'a'.repeat(64),
       'stellar.contracts.ephemeralAccount': 'CONTRACT123',
       'stellar.contracts.sweepController': 'CONTRACT456',
+      'app.claimBaseUrl': 'https://claim.bridgelet.io',
     };
     const v = cfg[key];
     if (!v) throw new Error(`Config key not found: ${key}`);

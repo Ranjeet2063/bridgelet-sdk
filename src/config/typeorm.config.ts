@@ -9,17 +9,27 @@ const __dirname = dirname(__filename);
 /**
  * DataSource used by the TypeORM CLI (migration:run, migration:revert, …).
  *
- * Pool rationale
- * ──────────────
- * • min: 2  – Keeps two warm connections so the first request after an idle
- *             period does not pay the TCP + TLS + PostgreSQL auth round-trips.
+ * Pool rationale (issue #516)
+ * ────────────────────────────
  * • max: 10 – Caps the per-instance pool to a value that leaves headroom for
- *             other services sharing the same PostgreSQL server. 10 aligns with
- *             a conservative PgBouncer transaction-mode default.
- * • acquireTimeoutMillis: 3000 – Fail-fast: if all 10 connections are busy for
- *             more than 3 s we surface an error immediately rather than queuing
- *             requests silently, which would hide a connection-leak or an
- *             under-provisioned database.
+ *             other services sharing the same PostgreSQL server. See
+ *             docs/deployment.md for how to size this against expected
+ *             concurrent load and multiple app instances.
+ * • min: 2  – node-postgres's `min` does NOT eagerly open connections at
+ *             startup; it only stops the pool from closing idle connections
+ *             below this floor once they exist (see `_isAboveMin` in
+ *             pg-pool). It does not remove first-request connection latency
+ *             on its own.
+ * • connectionTimeoutMillis: 3000 – This is the real node-postgres option
+ *             (previously misspelled here as `acquireTimeoutMillis`, which
+ *             pg-pool silently ignores). It governs BOTH the time allowed to
+ *             establish a brand-new physical connection AND, critically,
+ *             how long a caller queues for an already-open connection when
+ *             the pool is fully saturated. Without it set, pool exhaustion
+ *             queues callers indefinitely with no error – a silent hang
+ *             rather than clear backpressure. With it set, a caller that
+ *             can't get a connection within 3s fails fast with
+ *             "timeout exceeded when trying to connect" instead of hanging.
  */
 export default new DataSource({
   type: 'postgres',
@@ -35,6 +45,6 @@ export default new DataSource({
   extra: {
     min: 2,
     max: 10,
-    acquireTimeoutMillis: 3000,
+    connectionTimeoutMillis: 3000,
   },
 });

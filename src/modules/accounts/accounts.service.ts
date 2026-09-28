@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Account } from './entities/account.entity.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
 import { AccountResponseDto } from './dto/account-response.dto.js';
@@ -9,6 +9,10 @@ import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { AccountStatus } from './enums/account-status.enum.js';
+import {
+  assertValidAccountStatusTransition,
+  isValidAccountStatusTransition,
+} from './enums/account-status-transition.util.js';
 import { SecretEncryptionUtil } from '../../common/crypto/secret-encryption.util.js';
 import { KmsKeyProvider } from '../../common/crypto/kms-key.provider.js';
 import { WebhooksService } from '../webhooks/webhooks.service.js';
@@ -175,7 +179,15 @@ export class AccountsService {
         ),
       });
 
-      // Both Horizon and contract succeeded — advance to real status
+      // Both Horizon and contract succeeded — advance to real status.
+      // #445: validated against the single source of truth in
+      // account-status-transition.util.ts. `account.status` is read live rather
+      // than hardcoded so this stays correct if the row is ever re-entered.
+      assertValidAccountStatusTransition(
+        account.status,
+        AccountStatus.PENDING_PAYMENT,
+        `accountsService.create accountId=${account.id}`,
+      );
       account.status = AccountStatus.PENDING_PAYMENT;
       account.contractId = this.configService.getOrThrow<string>(
         'stellar.contracts.ephemeralAccount',
@@ -206,7 +218,24 @@ export class AccountsService {
     } catch (error: unknown) {
       this.latencyMetrics.record(Date.now() - startMs, false);
 
-      // Mark as FAILED so the record is traceable but clearly broken
+      // Mark as FAILED so the record is traceable but clearly broken.
+      //
+      // #445: this is a `catch` block handling an unrelated failure, so it
+      // deliberately uses the *non-throwing* validator. Throwing here would
+      // replace the real underlying error with a status-transition error,
+      // hiding the actual cause from both the caller and the logs — strictly
+      // worse than leaving the row un-marked. An unexpected source status is
+      // therefore logged and the write is still attempted (FAILED is
+      // best-effort terminal bookkeeping, not business-critical state).
+      if (
+        !isValidAccountStatusTransition(account.status, AccountStatus.FAILED)
+      ) {
+        this.logger.error(
+          `Lifecycle bug (#445): ${account.status} -> FAILED is not a valid ` +
+            `transition for account ${account.id}. Marking it FAILED anyway, ` +
+            `but this should not happen.`,
+        );
+      }
       account.status = AccountStatus.FAILED;
       await this.accountsRepository.save(account);
 
@@ -221,7 +250,12 @@ export class AccountsService {
   }
 
   public async findOne(id: string): Promise<AccountResponseDto> {
-    const account = await this.accountsRepository.findOne({ where: { id } });
+    // Soft-deleted accounts are excluded so GET /accounts/:id 404s for them,
+    // matching findAll(). Verified for #698 (duplicate of the already-resolved
+    // #637, fixed in PR #771).
+    const account = await this.accountsRepository.findOne({
+      where: { id, deletedAt: IsNull() },
+    });
 
     if (!account) {
       throw new NotFoundException(`Account ${id} not found`);
@@ -290,7 +324,7 @@ export class AccountsService {
     // Integration notes:
     // - `CLAIM_BASE_URL` is an environment-level integration point. External
     //   systems and email templates may rely on the shape of this URL.
-    const baseUrl = process.env.CLAIM_BASE_URL || 'https://claim.bridgelet.io';
+    const baseUrl = this.configService.getOrThrow<string>('app.claimBaseUrl');
     return `${baseUrl}/c/${token}`;
   }
 

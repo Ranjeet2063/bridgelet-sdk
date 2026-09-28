@@ -285,6 +285,28 @@ describe('ClaimsService Integration Tests', () => {
         service.redeemClaim(mockToken, mockDestinationAddress),
       ).rejects.toThrow('Sweep failed');
     });
+
+    // Verified for #707 (duplicate of the already-resolved #646, fixed in PR #772).
+    it('passes concurrent redemption attempts for the same token straight through without deduping them itself', async () => {
+      // ClaimsService is a passthrough (see file header): it must not hide a
+      // double-redemption race by silently coalescing calls. Guarding the
+      // actual claim-state transition is ClaimRedemptionProvider's job
+      // (claim-redemption.provider.spec.ts); here we only assert the service
+      // forwards both concurrent calls and surfaces whatever the provider
+      // decides (one success, one rejection) unchanged.
+      claimRedemptionProvider.redeemClaim
+        .mockResolvedValueOnce(mockRedemptionResponse)
+        .mockRejectedValueOnce(new Error('Claim already redeemed'));
+
+      const [first, second] = await Promise.allSettled([
+        service.redeemClaim(mockToken, mockDestinationAddress),
+        service.redeemClaim(mockToken, mockDestinationAddress),
+      ]);
+
+      expect(claimRedemptionProvider.redeemClaim).toHaveBeenCalledTimes(2);
+      expect(first.status).toBe('fulfilled');
+      expect(second.status).toBe('rejected');
+    });
   });
 
   describe('Service Integration - Combined Operations', () => {

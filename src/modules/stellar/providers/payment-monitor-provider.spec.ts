@@ -90,7 +90,13 @@ describe('PaymentMonitorProvider', () => {
     recordPayment: jest.MockedFunction<StellarService['recordPayment']>;
   };
   let accountsRepo: {
-    update: jest.MockedFunction<() => Promise<void>>;
+    // #445: `Repository.update()` resolves to an `UpdateResult` carrying
+    // `affected`. The mock used to resolve `void`, which is not a faithful
+    // stand-in — the provider now branches on `affected` to distinguish a
+    // written row from an already-advanced one, so the mock has to model it.
+    update: jest.MockedFunction<
+      () => Promise<{ affected: number | null; raw: unknown[] }>
+    >;
     find: jest.MockedFunction<() => Promise<Account[]>>;
   };
 
@@ -103,7 +109,9 @@ describe('PaymentMonitorProvider', () => {
     mockPaymentsBuilder.cursor.mockClear();
 
     accountsRepo = {
-      update: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      update: jest
+        .fn<() => Promise<{ affected: number | null; raw: unknown[] }>>()
+        .mockResolvedValue({ affected: 1, raw: [] }),
       find: jest.fn<() => Promise<Account[]>>().mockResolvedValue([]),
     };
 
@@ -207,9 +215,28 @@ describe('PaymentMonitorProvider', () => {
       capturedOnMessage!(makePaymentRecord());
       await new Promise(setImmediate); // flush async chain
 
-      expect(accountsRepo.update).toHaveBeenCalledWith('acc-uuid-1', {
-        status: AccountStatus.PENDING_CLAIM,
-      });
+      // #445: the write is conditional on the source status so it cannot move
+      // an account backwards and is a no-op once the account has advanced
+      // (e.g. the interval poller already moved it). This makes the code match
+      // the invariant this file's own class doc already claimed.
+      expect(accountsRepo.update).toHaveBeenCalledWith(
+        { id: 'acc-uuid-1', status: AccountStatus.PENDING_PAYMENT },
+        { status: AccountStatus.PENDING_CLAIM },
+      );
+    });
+
+    // #445: the self-transition hazard that made the write conditional in the
+    // first place. A duplicate payment event for an account the poller has
+    // already advanced must not clobber it, and must not throw.
+    it('skips the PENDING_CLAIM write when the account already advanced', async () => {
+      accountsRepo.update.mockResolvedValue({ affected: 0, raw: [] });
+
+      capturedOnMessage!(makePaymentRecord());
+      await new Promise(setImmediate);
+
+      expect(accountsRepo.update).toHaveBeenCalledTimes(1);
+      // Still closes the stream — the payment *was* recorded on-chain.
+      expect(mockCloseStream).toHaveBeenCalledTimes(1);
     });
 
     it('closes the stream after a successful payment is recorded', async () => {
@@ -265,12 +292,31 @@ describe('PaymentMonitorProvider', () => {
         capturedOnMessage!(makePaymentRecord());
         await new Promise(setImmediate);
 
-        expect(accountsRepo.update).toHaveBeenCalledWith('acc-uuid-1', {
-          status: AccountStatus.FAILED,
-        });
+        // #445: conditional on PENDING_PAYMENT, so a non-retryable error on an
+        // account that has already advanced cannot drag it backwards into
+        // FAILED. PENDING_PAYMENT -> FAILED is a legal transition.
+        expect(accountsRepo.update).toHaveBeenCalledWith(
+          { id: 'acc-uuid-1', status: AccountStatus.PENDING_PAYMENT },
+          { status: AccountStatus.FAILED },
+        );
         expect(mockCloseStream).toHaveBeenCalledTimes(1);
       },
     );
+
+    // #445: the backwards-move hazard on the FAILED path.
+    it('skips the FAILED write when the account already advanced', async () => {
+      accountsRepo.update.mockResolvedValue({ affected: 0, raw: [] });
+      stellarService.recordPayment.mockRejectedValueOnce(
+        new Error('TooManyPayments'),
+      );
+
+      service.watch(makeAccount());
+      capturedOnMessage!(makePaymentRecord());
+      await new Promise(setImmediate);
+
+      expect(accountsRepo.update).toHaveBeenCalledTimes(1);
+      expect(mockCloseStream).toHaveBeenCalledTimes(1);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -346,6 +392,59 @@ describe('PaymentMonitorProvider', () => {
       expect(stellarService.recordPayment).toHaveBeenCalledWith(
         expect.objectContaining({ amount: 15_000_000n }),
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Horizon paging tokens & multiple inbound payments (#717)
+  // -------------------------------------------------------------------------
+
+  describe('multiple inbound payments with paging tokens (#717)', () => {
+    beforeEach(() => {
+      service.watch(makeAccount());
+    });
+
+    it('processes sequence of payments with paging tokens when an account receives multiple payments before expected one', async () => {
+      // First event: non-payment operation with earlier paging token
+      capturedOnMessage!({
+        ...makePaymentRecord({ paging_token: '1000', amount: '0.0000010' }),
+        type: 'other_op',
+      });
+      await new Promise(setImmediate);
+      expect(stellarService.recordPayment).not.toHaveBeenCalled();
+
+      // Second event: payment not addressed to watched account
+      capturedOnMessage!(
+        makePaymentRecord({
+          paging_token: '1001',
+          to: 'GOTHER',
+          amount: '1.0000000',
+        }),
+      );
+      await new Promise(setImmediate);
+      expect(stellarService.recordPayment).not.toHaveBeenCalled();
+
+      // Third event: expected valid payment with its paging token
+      capturedOnMessage!(
+        makePaymentRecord({
+          paging_token: '1002',
+          amount: '100.0000000',
+        }),
+      );
+      await new Promise(setImmediate);
+
+      expect(stellarService.recordPayment).toHaveBeenCalledTimes(1);
+      expect(stellarService.recordPayment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          contractId: 'CONTRACT123',
+          signerSecret: 'SFUNDING_SECRET',
+          amount: 1_000_000_000n,
+        }),
+      );
+      expect(accountsRepo.update).toHaveBeenCalledWith('acc-uuid-1', {
+        status: AccountStatus.PENDING_CLAIM,
+      });
+      expect(mockCloseStream).toHaveBeenCalledTimes(1);
     });
   });
 });

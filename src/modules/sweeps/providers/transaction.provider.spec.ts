@@ -1747,4 +1747,139 @@ describe('TransactionProvider', () => {
       }
     });
   });
+  /**
+   * #649: fee-bump audit fields on TransactionResult.
+   */
+  describe('fee-bump audit fields', () => {
+    const params = {
+      ephemeralSecret: 'S_VALID_SECRET',
+      destinationAddress:
+        'GD5J6HLF5666X4AZLTFTXLY2CQZBS2LBJBIMYV3SYGQ5OAQY5QO4XRNM',
+      asset: 'native',
+      amount: '100',
+    };
+
+    beforeEach(() => {
+      mockLoadAccount.mockResolvedValue({
+        id: 'acc-123',
+        sequence: '1',
+        balances: [],
+      });
+    });
+
+    it('should report feeBump false for an ordinary submission', async () => {
+      mockSubmitTransaction.mockResolvedValue({
+        hash: 'tx-hash-plain',
+        ledger: 100,
+        successful: true,
+      });
+
+      const result = await provider.executeSweepTransaction(params);
+
+      // Positively false, not merely absent - the field is what an audit
+      // trail reads to know the hash needs no reconciliation.
+      expect(result.feeBump).toBe(false);
+      expect(result.innerTransactionHash).toBeUndefined();
+    });
+
+    it('should report feeBump and the inner hash for a fee-bumped submission', async () => {
+      mockSubmitTransaction.mockResolvedValue({
+        hash: 'tx-hash-outer',
+        ledger: 101,
+        successful: true,
+        fee_bump_transaction: { hash: 'tx-hash-outer' },
+        inner_transaction: { hash: 'tx-hash-inner' },
+      });
+
+      const result = await provider.executeSweepTransaction(params);
+
+      expect(result.feeBump).toBe(true);
+      // hash is the outer envelope; the inner hash is what was originally
+      // signed and is what reconciles against the first submission.
+      expect(result.hash).toBe('tx-hash-outer');
+      expect(result.innerTransactionHash).toBe('tx-hash-inner');
+    });
+
+    it('should report the fee-bump fields on mergeAccount results too', async () => {
+      mockSubmitTransaction.mockResolvedValue({
+        hash: 'merge-hash-outer',
+        ledger: 102,
+        successful: true,
+        fee_bump_transaction: { hash: 'merge-hash-outer' },
+        inner_transaction: { hash: 'merge-hash-inner' },
+      });
+
+      const result = await provider.mergeAccount({
+        ephemeralSecret: 'S_VALID_SECRET',
+        destinationAddress:
+          'GD5J6HLF5666X4AZLTFTXLY2CQZBS2LBJBIMYV3SYGQ5OAQY5QO4XRNM',
+      });
+
+      expect(result.feeBump).toBe(true);
+      expect(result.innerTransactionHash).toBe('merge-hash-inner');
+    });
+  });
+  /**
+   * #647: the account-merge path must honour the same Horizon ledger contract
+   * as the payment path. It previously returned result.ledger unconverted.
+   */
+  describe('mergeAccount - ledger coercion', () => {
+    const mergeParams = {
+      ephemeralSecret: 'S_VALID_SECRET',
+      destinationAddress:
+        'GD5J6HLF5666X4AZLTFTXLY2CQZBS2LBJBIMYV3SYGQ5OAQY5QO4XRNM',
+    };
+
+    beforeEach(() => {
+      mockLoadAccount.mockResolvedValue({
+        id: 'acc-123',
+        sequence: '1',
+        balances: [],
+      });
+    });
+
+    it('should coerce a string ledger to a number', async () => {
+      // Horizon can return ledger as a string even though the SDK types it as
+      // a number - see transaction-result.interface.ts.
+      mockSubmitTransaction.mockResolvedValue({
+        hash: 'merge-hash',
+        ledger: '104',
+        successful: true,
+      });
+
+      const result = await provider.mergeAccount(mergeParams);
+
+      expect(result.ledger).toBe(104);
+      expect(typeof result.ledger).toBe('number');
+    });
+
+    it('should reject a non-numeric ledger instead of returning NaN', async () => {
+      mockSubmitTransaction.mockResolvedValue({
+        hash: 'merge-hash',
+        ledger: 'not-a-ledger',
+        successful: true,
+      });
+
+      await expect(provider.mergeAccount(mergeParams)).rejects.toThrow(
+        'Invalid ledger value: not-a-ledger',
+      );
+    });
+
+    it('should match the payment path for the same ledger value', async () => {
+      mockSubmitTransaction.mockResolvedValue({
+        hash: 'hash',
+        ledger: '105',
+        successful: true,
+      });
+
+      const merged = await provider.mergeAccount(mergeParams);
+      const paid = await provider.executeSweepTransaction({
+        ...mergeParams,
+        asset: 'native',
+        amount: '100',
+      });
+
+      expect(merged.ledger).toBe(paid.ledger);
+    });
+  });
 });

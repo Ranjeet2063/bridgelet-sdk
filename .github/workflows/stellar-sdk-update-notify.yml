@@ -1,0 +1,46 @@
+name: Stellar SDK Update Check
+
+# Notification only. This workflow never upgrades anything and is deliberately
+# unable to fail a build — see `continue-on-error` and the job-level
+# `permissions` below (issue #446, acceptance criterion 2).
+
+on:
+  schedule:
+    # Weekly on Monday, deliberately off the hour: the top of the hour is when
+    # every other scheduled workflow on GitHub is queued, and Actions delays
+    # high-load schedules.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+# Default to read-only at the workflow level; the job below opts in to exactly
+# the one extra permission it needs.
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Notify when a newer @stellar/stellar-sdk is published
+    runs-on: ubuntu-latest
+    # Must not be able to block a merge or turn a registry outage red.
+    continue-on-error: true
+    permissions:
+      contents: read # read package.json
+      issues: write # open/update the single tracking issue
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          node-version: '20'
+
+      # Low-noise by construction: the script edits one labelled issue in place
+      # and performs no write at all when the published version has not changed,
+      # so a quiet week produces no activity. It exits 0 on every error path.
+      - name: Check npm for a newer release and update the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/notify-stellar-sdk-update.mjs

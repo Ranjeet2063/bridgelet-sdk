@@ -10,13 +10,15 @@ import { ConfigService } from '@nestjs/config';
 import { StellarService } from '../stellar/stellar.service.js';
 import { Account } from '../accounts/entities/account.entity.js';
 import { AccountStatus } from '../accounts/enums/account-status.enum.js';
+import { assertValidAccountStatusTransition } from '../accounts/enums/account-status-transition.util.js';
 import { WebhooksService } from '../webhooks/webhooks.service.js';
+import { IntervalJobRunner } from '../../common/utils/interval-job-runner.js';
 
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerService.name);
-  private expiryHandle: ReturnType<typeof setInterval> | null = null;
-  private initializingHandle: ReturnType<typeof setInterval> | null = null;
+  private expiryRunner: IntervalJobRunner | null = null;
+  private initializingRunner: IntervalJobRunner | null = null;
 
   constructor(
     @InjectRepository(Account)
@@ -27,23 +29,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    const expiryIntervalMs = parseInt(
-      process.env.EXPIRY_CHECK_INTERVAL_MS ?? '300000',
-      10,
+    const expiryIntervalMs = Number(
+      this.configService.getOrThrow<number>('app.expiryCheckIntervalMs'),
     );
-    const initializingIntervalMs = parseInt(
-      process.env.INITIALIZING_CLEANUP_INTERVAL_MS ?? '900000',
-      10,
+    const initializingIntervalMs = Number(
+      this.configService.getOrThrow<number>(
+        'app.initializingCleanupIntervalMs',
+      ),
     );
 
-    this.expiryHandle = setInterval(
-      () => void this.runExpiryJob(),
+    this.expiryRunner = this.createRunner(
       expiryIntervalMs,
+      () => this.runExpiryJob(),
+      'Expiry job',
     );
-    this.initializingHandle = setInterval(
-      () => void this.runInitializingCleanup(),
+    this.initializingRunner = this.createRunner(
       initializingIntervalMs,
+      () => this.runInitializingCleanup(),
+      'INITIALIZING cleanup',
     );
+    this.expiryRunner.start();
+    this.initializingRunner.start();
 
     this.logger.log(`Expiry job started (interval: ${expiryIntervalMs}ms)`);
     this.logger.log(
@@ -52,15 +58,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleDestroy(): void {
-    if (this.expiryHandle !== null) {
-      clearInterval(this.expiryHandle);
-      this.expiryHandle = null;
-    }
-    if (this.initializingHandle !== null) {
-      clearInterval(this.initializingHandle);
-      this.initializingHandle = null;
-    }
+    this.expiryRunner?.stop();
+    this.initializingRunner?.stop();
+    this.expiryRunner = null;
+    this.initializingRunner = null;
     this.logger.log('Scheduler jobs stopped');
+  }
+
+  private createRunner(
+    intervalMs: number,
+    task: () => Promise<void>,
+    name: string,
+  ): IntervalJobRunner {
+    return new IntervalJobRunner({
+      intervalMs,
+      jitterMs: Math.min(Math.floor(intervalMs * 0.1), 5_000),
+      task,
+      onError: (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`${name} failed: ${message}`);
+      },
+    });
   }
 
   /**
@@ -119,6 +137,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // #445: runExpiryJob() only selects PENDING_PAYMENT and PENDING_CLAIM
+    // accounts, and both are legal sources for EXPIRED. The validator is
+    // asserted here (rather than trusted) so that if the query is ever widened
+    // to a status that may not expire — e.g. CLAIMING or a terminal one — this
+    // throws instead of silently expiring an in-flight or already-finished
+    // account.
+    assertValidAccountStatusTransition(
+      account.status,
+      AccountStatus.EXPIRED,
+      `schedulerService.expireAccount accountId=${account.id}`,
+    );
+
     const expiredAt = new Date();
     await this.accountsRepository.update(account.id, {
       status: AccountStatus.EXPIRED,
@@ -139,9 +169,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
    * for these accounts.
    */
   async runInitializingCleanup(): Promise<void> {
-    const timeoutMs = parseInt(
-      process.env.INITIALIZING_TIMEOUT_MS ?? '600000',
-      10,
+    const timeoutMs = this.configService.getOrThrow<number>(
+      'app.initializingTimeoutMs',
     );
     const cutoff = new Date(Date.now() - timeoutMs);
 
@@ -172,6 +201,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   private async markInitializingFailed(account: Account): Promise<void> {
     try {
+      // #445: the query only selects INITIALIZING accounts, and
+      // INITIALIZING → FAILED is a legal edge. Asserted for the same reason as
+      // the expiry path: a widened query must fail loudly. This throw is
+      // caught and logged by the enclosing try/catch, so a lifecycle bug
+      // surfaces in the logs and via Promise.allSettled rather than aborting
+      // the whole cleanup pass.
+      assertValidAccountStatusTransition(
+        account.status,
+        AccountStatus.FAILED,
+        `schedulerService.markInitializingFailed accountId=${account.id}`,
+      );
+
       // Explicit typed variable avoids TypeORM _QueryDeepPartialEntity inference on jsonb spread
       const metadata: Record<string, any> = {
         ...(account.metadata ?? {}),

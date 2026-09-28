@@ -24,11 +24,26 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci
+        run: npm install
 
       - name: Check Formatting
 
         run: npx prettier --check .
+
+      # embedded-postgres ships no types; test/embedded-postgres.d.ts is
+      # maintained by hand against a beta range. Fail the build if the pinned
+      # dependency and the declarations drift apart (issue #673).
+      - name: Verify embedded-postgres type declarations are in sync
+        run: npm run check:embedded-postgres-types
+
+      # @stellar/stellar-sdk is pinned to an exact version because it produces
+      # the Stellar XDR and Soroban ScVal encodings this service signs and
+      # submits; those encodings can drift between releases in ways the test
+      # suite does not catch. A stray `^` in a future PR would silently
+      # reintroduce that risk, so fail the build with a message that explains
+      # it rather than burying the rule in a lint warning (issue #446).
+      - name: Verify @stellar/stellar-sdk is pinned to an exact version
+        run: npm run check:stellar-sdk-pin
 
       - name: Linting
         run: npm run lint

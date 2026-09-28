@@ -12,12 +12,17 @@
 # What it does:
 #   1. Refuses to run outside a git repo / outside the expected project
 #      (safety check so it can never be run against the wrong directory).
-#   2. Removes the existing src/database/migrations/ directory.
-#   3. Recreates it and writes out each migration file verbatim.
+#   2. Aborts when src/database/migrations/ contains uncommitted changes
+#      (modified, staged, or untracked files) unless --force was given,
+#      because the rewrite below would permanently discard them.
+#   3. Removes the existing src/database/migrations/ directory.
+#   4. Recreates it and writes out each migration file verbatim.
 #
 # Usage:
-#   ./scripts/generate-migrations.sh          # prompts before deleting
-#   ./scripts/generate-migrations.sh --yes    # skip the confirmation prompt
+#   ./scripts/generate-migrations.sh                  # prompts before deleting
+#   ./scripts/generate-migrations.sh --yes            # skip the confirmation prompt
+#   ./scripts/generate-migrations.sh --yes --force    # skip the prompt AND overwrite
+#                                                     # uncommitted changes in the folder
 #
 set -euo pipefail
 
@@ -32,11 +37,38 @@ if [ ! -f "$REPO_ROOT/package.json" ] || ! grep -q '"bridgelet-sdk"' "$REPO_ROOT
 fi
 
 AUTO_YES=false
+FORCE_OVERWRITE=false
 for arg in "$@"; do
   case "$arg" in
     --yes|-y) AUTO_YES=true ;;
+    --force) FORCE_OVERWRITE=true ;;
+    *)
+      echo "error: unknown argument: $arg" >&2
+      echo "       usage: $0 [--yes] [--force]" >&2
+      exit 1
+      ;;
   esac
 done
+
+# Pre-flight: this script deletes and rewrites the entire migrations folder,
+# so any hand-edited or never-committed migration file in it would be
+# silently destroyed. Refuse to run while git reports uncommitted changes
+# in that folder unless --yes is also paired with an explicit --force.
+UNCOMMITTED_MIGRATIONS="$(git -C "$REPO_ROOT" status --porcelain -- "$MIGRATIONS_DIR" 2>/dev/null || true)"
+if [ -n "$UNCOMMITTED_MIGRATIONS" ] && { [ "$AUTO_YES" != true ] || [ "$FORCE_OVERWRITE" != true ]; }; then
+  echo "error: uncommitted changes detected in src/database/migrations/:" >&2
+  echo "$UNCOMMITTED_MIGRATIONS" | sed 's/^/    /' >&2
+  echo "" >&2
+  echo "This script deletes and rewrites the entire migrations folder, so running" >&2
+  echo "it now would permanently discard the changes above. Commit or stash them" >&2
+  echo "first, or re-run with --yes --force to overwrite them deliberately." >&2
+  exit 1
+fi
+if [ -n "$UNCOMMITTED_MIGRATIONS" ] && [ "$AUTO_YES" = true ] && [ "$FORCE_OVERWRITE" = true ]; then
+  echo "warning: --yes --force given; the following uncommitted changes in" >&2
+  echo "         src/database/migrations/ will be overwritten:" >&2
+  echo "$UNCOMMITTED_MIGRATIONS" | sed 's/^/    /' >&2
+fi
 
 if [ -d "$MIGRATIONS_DIR" ] && [ "$AUTO_YES" != true ]; then
   read -r -p "This will delete and recreate $MIGRATIONS_DIR. Continue? [y/N] " reply
@@ -333,74 +365,99 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 /**
  * AddHighTrafficIndexes1718100006000
  *
- * Background — Query Audit
- * ────────────────────────
- * EXPLAIN ANALYZE patterns reviewed:
+ * Index → query map
+ * ─────────────────
+ * Every index in this migration exists to serve a named query, and none of
+ * those queries is declared in this file. Before dropping or renaming an
+ * index below, find its call site first — these are load-bearing for the
+ * expiry scheduler and the payment poller even though nothing in the
+ * migration itself references them.
  *
- * 1. Expiry scheduler (SchedulerService.runExpiryJob):
- *      WHERE status IN ('pending_payment','pending_claim')
- *        AND "expiresAt" < NOW()
- *    Existing separate indexes on status and expiresAt allow
- *    index-only scans per column, but a composite index lets
- *    PostgreSQL satisfy both predicates in a single index scan,
- *    which eliminates the bitmap heap AND step on large tables.
+ * 1. IDX_accounts_status_expiresAt ("status", "expiresAt")
+ *    Serves two queries that scan the same (status, expiresAt) shape in
+ *    opposite directions:
  *
- * 2. INITIALIZING cleanup (SchedulerService.runInitializingCleanup):
- *      WHERE status = 'initializing'
- *        AND "createdAt" < <cutoff>
- *    No composite index existed. Without it, PostgreSQL fetches
- *    all INITIALIZING rows and then filters by createdAt, which
- *    degrades as the table grows.
+ *      • SchedulerService.runExpiryJob()  — rows to expire next tick:
+ *          WHERE status IN ('pending_payment','pending_claim')
+ *            AND "expiresAt" < NOW()             -- TypeORM LessThan(now)
  *
- * 3. Status-filtered API list (AccountsService.findAll):
- *      WHERE status = :status
- *    The single-column IDX_accounts_status already covers this
- *    efficiently; no additional index is required.
+ *      • PaymentMonitorService.pollAllAccounts()  — live accounts still
+ *        eligible for an inbound payment:
+ *          WHERE status = 'pending_payment'
+ *            AND "expiresAt" > NOW()             -- TypeORM MoreThan(now)
+ *        The "> NOW()" half is what keeps the poller from hitting Horizon
+ *        for accounts the expiry job is about to expire anyway.
  *
- * 4. FK lookup (claims JOIN accounts):
- *      WHERE "accountId" = :id
- *    IDX_claims_accountId already exists from CreateClaimsTable.
- *    No additional index is required.
+ *    Before this migration both predicates were satisfied by separate
+ *    scans of IDX_accounts_status and IDX_accounts_expiresAt plus a
+ *    bitmap AND; the composite satisfies both in a single index scan and
+ *    eliminates that step on large tables. Column order: status first,
+ *    because it is a low-cardinality enum (8 values) that prunes the row
+ *    set before the timestamp column filters it further. PostgreSQL can
+ *    also use this index as a left-prefix scan for status-only predicates.
  *
- * Index decisions
- * ───────────────
- * • IDX_accounts_status_expiresAt  (composite, status first)
- *   – Chosen column order: status has lower cardinality (enum with
- *     7 values) so it prunes the row set first, and then expiresAt
- *     (timestamp) finishes the job. PostgreSQL can also use this
- *     index for status-only queries as a left-prefix scan.
+ * 2. IDX_accounts_status_createdAt ("status", "createdAt")
+ *    Serves SchedulerService.runInitializingCleanup() — INITIALIZING
+ *    accounts stuck past `app.initializingTimeoutMs`, marked FAILED:
+ *          WHERE status = 'initializing'
+ *            AND "createdAt" < <cutoff>          -- TypeORM LessThan(cutoff)
+ *    No composite index existed before this migration. Without it,
+ *    PostgreSQL fetched every INITIALIZING row and then filtered by
+ *    createdAt, which degrades as the table grows. Same column-order
+ *    rationale as (1).
  *
- * • IDX_accounts_status_createdAt  (composite, status first)
- *   – Same rationale. Covers the INITIALIZING cleanup query exactly.
+ * 3. IDX_accounts_createdAt ("createdAt")
+ *    Range scans on createdAt with no status predicate (audit and
+ *    time-boxed reporting). No production caller today: both jobs above
+ *    carry a status predicate and use their composites instead. This is
+ *    the least load-bearing of the three — dropping it costs reporting
+ *    queries only, not a hot path. Its overhead (~20 % larger write cost
+ *    on accounts) is acceptable given the low insert rate.
  *
- * • IDX_accounts_createdAt  (single-column)
- *   – Retained as a standalone index to support future range scans
- *     on createdAt independent of status (e.g., audit queries,
- *     time-boxed reporting). Its overhead (~20 % larger write cost
- *     on accounts) is acceptable given the low insert rate.
+ * Queries deliberately NOT served by this migration
+ * ─────────────────────────────────────────────────
+ * • AccountsService.findAll() — `deletedAt IS NULL` plus an optional
+ *   `status = :status` predicate. Those are covered by IDX_accounts_deletedAt
+ *   (1718100008000-AddDeletedAtToAccountsTable) and the single-column
+ *   IDX_accounts_status (1718100000000-CreateAccountsTable); no new index
+ *   is required here.
+ * • FK lookup (claims JOIN accounts ON "accountId") — covered by
+ *   IDX_claims_accountId from 1718100001000-CreateClaimsTable.
  *
- * All indexes use the default B-tree access method which PostgreSQL
- * can use for equality, range (<, >), and ORDER BY optimisation.
+ * All indexes use the default B-tree access method, which PostgreSQL can
+ * use for equality, range (<, >), and ORDER BY optimisation.
+ *
+ * Keep in sync when an index here changes
+ * ───────────────────────────────────────
+ * • Account entity @Index decorators
+ *   (src/modules/accounts/entities/account.entity.ts)
+ * • docs/database-schema.md → "Database Indexes → accounts"
+ * • scripts/generate-migrations.sh (source of truth for this folder)
  */
 export class AddHighTrafficIndexes1718100006000 implements MigrationInterface {
   name = 'AddHighTrafficIndexes1718100006000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // Composite index: expiry-scheduler query
-    //   WHERE status IN (...) AND "expiresAt" < NOW()
+    // IDX_accounts_status_expiresAt — expiry scheduler and payment poller.
+    // Both scan ("status", "expiresAt"); see the header for the call sites:
+    //   SchedulerService.runExpiryJob()          status IN (...) AND "expiresAt" < NOW()
+    //   PaymentMonitorService.pollAllAccounts()  status = 'pending_payment' AND "expiresAt" > NOW()
     await queryRunner.query(`
       CREATE INDEX "IDX_accounts_status_expiresAt"
         ON "accounts" ("status", "expiresAt")
     `);
 
-    // Composite index: INITIALIZING cleanup query
-    //   WHERE status = 'initializing' AND "createdAt" < <cutoff>
+    // IDX_accounts_status_createdAt — INITIALIZING cleanup:
+    //   SchedulerService.runInitializingCleanup()
+    //     WHERE status = 'initializing' AND "createdAt" < <cutoff>
     await queryRunner.query(`
       CREATE INDEX "IDX_accounts_status_createdAt"
         ON "accounts" ("status", "createdAt")
     `);
 
-    // Single-column index: createdAt range scans (audit / reporting)
+    // IDX_accounts_createdAt — no production caller today; createdAt range
+    // scans for audit / time-boxed reporting. Least load-bearing of the three:
+    // both jobs above carry a status predicate and use their composites.
     await queryRunner.query(`
       CREATE INDEX "IDX_accounts_createdAt"
         ON "accounts" ("createdAt")

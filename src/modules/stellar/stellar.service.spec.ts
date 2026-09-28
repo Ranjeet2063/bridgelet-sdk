@@ -116,6 +116,55 @@ describe('StellarService', () => {
       const kp2 = service.generateKeypair();
       expect(kp1.publicKey()).not.toBe(kp2.publicKey());
     });
+
+    // #654 / #715: generateKeypair produces the secret key for an account that holds
+    // funds, so the entropy source is security-relevant. These guard the chain
+    // documented on StellarService.generateKeypair (confirming CSPRNG usage and
+    // no Math.random or weaker RNG in the chain).
+
+    it('does not use Math.random anywhere in the key-generation path', () => {
+      const mathRandom = jest.spyOn(Math, 'random');
+
+      try {
+        service.generateKeypair();
+        expect(mathRandom).not.toHaveBeenCalled();
+      } finally {
+        mathRandom.mockRestore();
+      }
+    });
+
+    it('draws key material from the Web Crypto CSPRNG', () => {
+      // Keypair.random() -> @noble/curves randomPrivateKey -> @noble/hashes
+      // randomBytes -> crypto.getRandomValues. Spying on the boundary proves
+      // the CSPRNG is what actually produces the bytes.
+      const getRandomValues = jest.spyOn(globalThis.crypto, 'getRandomValues');
+
+      try {
+        service.generateKeypair();
+        expect(getRandomValues).toHaveBeenCalled();
+      } finally {
+        getRandomValues.mockRestore();
+      }
+    });
+
+    it('produces a full-length, well-formed Ed25519 secret seed', () => {
+      const kp = service.generateKeypair();
+
+      expect(kp.secret()).toMatch(/^S[A-Z2-7]{55}$/);
+      expect(StellarSdk.StrKey.isValidEd25519SecretSeed(kp.secret())).toBe(
+        true,
+      );
+      // 32 bytes of entropy, not a truncated or padded seed.
+      expect(kp.rawSecretKey()).toHaveLength(32);
+    });
+
+    it('does not repeat a key across many draws', () => {
+      const seen = new Set<string>();
+      for (let i = 0; i < 250; i++) {
+        seen.add(service.generateKeypair().publicKey());
+      }
+      expect(seen.size).toBe(250);
+    });
   });
 
   // ── toExpiryLedger ──────────────────────────────────────────────────────────
@@ -487,6 +536,25 @@ describe('StellarService', () => {
 
       await expect(service.getAccountInfo(CONTRACT_ID)).rejects.toThrow(
         'get_info returned no value',
+      );
+    });
+
+    it('propagates network failures from simulateTransaction', async () => {
+      sorobanServer.simulateTransaction.mockRejectedValue(
+        new Error('Soroban RPC unavailable'),
+      );
+
+      await expect(service.getAccountInfo(CONTRACT_ID)).rejects.toThrow(
+        'Soroban RPC unavailable',
+      );
+    });
+
+    it('rejects a malformed simulation response without a result', async () => {
+      sorobanServer.simulateTransaction.mockResolvedValue({});
+      jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
+
+      await expect(service.getAccountInfo(CONTRACT_ID)).rejects.toThrow(
+        `get_info returned no value for ${CONTRACT_ID}`,
       );
     });
   });

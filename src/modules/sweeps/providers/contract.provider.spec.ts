@@ -13,7 +13,10 @@ import {
   Account,
   Operation,
 } from '@stellar/stellar-sdk';
-import { ContractProvider } from './contract.provider.js';
+import {
+  ContractProvider,
+  UNKNOWN_CONTRACT_VERSION,
+} from './contract.provider.js';
 import { ContractAuthResult } from '../interfaces/contract-auth-result.interface.js';
 import { AuthorizeSweepParams } from '../interfaces/authorize-sweep-params.interface.js';
 import { SweepSignerUtil } from '../../../common/crypto/sweep-signer.util.js';
@@ -118,6 +121,9 @@ describe('ContractProvider', () => {
       'SDUMMYSEEDFORTESTING1234567890ABCDEFGHIJKLMNOPQRSTUV',
     'stellar.contracts.sweepController':
       'CDUMMYSWEEPCONTROLLER123456789ABCDEFGHIJKLMNOP',
+    // Deliberately not '0.1.0': proves the version is read from config and
+    // is no longer the literal that used to be returned (#648).
+    'stellar.contracts.ephemeralAccountVersion': '1.2.3',
   };
 
   beforeEach(async () => {
@@ -174,6 +180,9 @@ describe('ContractProvider', () => {
         {
           provide: ConfigService,
           useValue: {
+            get: jest.fn(
+              (key: string) => mockConfig[key as keyof typeof mockConfig],
+            ),
             getOrThrow: jest.fn((key: string) => {
               const value = mockConfig[key as keyof typeof mockConfig];
               if (!value) {
@@ -236,6 +245,9 @@ describe('ContractProvider', () => {
           {
             provide: ConfigService,
             useValue: {
+              get: jest.fn(
+                (key: string) => mockConfig[key as keyof typeof mockConfig],
+              ),
               getOrThrow: jest.fn((key: string) => {
                 if (key === 'stellar.network') return 'mainnet';
                 return mockConfig[key as keyof typeof mockConfig];
@@ -264,6 +276,9 @@ describe('ContractProvider', () => {
           {
             provide: ConfigService,
             useValue: {
+              get: jest.fn(
+                (key: string) => mockConfig[key as keyof typeof mockConfig],
+              ),
               getOrThrow: jest.fn(() => {
                 throw new Error(
                   'Configuration key not found: stellar.contracts.ephemeralAccount',
@@ -284,6 +299,9 @@ describe('ContractProvider', () => {
           {
             provide: ConfigService,
             useValue: {
+              get: jest.fn(
+                (key: string) => mockConfig[key as keyof typeof mockConfig],
+              ),
               getOrThrow: jest.fn((key: string) => {
                 if (key === 'stellar.sorobanRpcUrl') {
                   throw new Error('Configuration key not found');
@@ -305,6 +323,9 @@ describe('ContractProvider', () => {
           {
             provide: ConfigService,
             useValue: {
+              get: jest.fn(
+                (key: string) => mockConfig[key as keyof typeof mockConfig],
+              ),
               getOrThrow: jest.fn((key: string) => {
                 if (key === 'stellar.network') {
                   throw new Error('Configuration key not found');
@@ -325,13 +346,48 @@ describe('ContractProvider', () => {
    * Tests contract information retrieval
    */
   describe('getContractInfo', () => {
-    it('should return contract ID and version', () => {
+    it('should return contract ID and the configured version', () => {
       const info = provider.getContractInfo();
 
       expect(info).toEqual({
         contractId: mockConfig['stellar.contracts.ephemeralAccount'],
-        version: '0.1.0',
+        version: mockConfig['stellar.contracts.ephemeralAccountVersion'],
       });
+    });
+
+    it('should not return the previously hardcoded version', () => {
+      // #648: guards against reintroducing a literal that drifts from the
+      // deployed contract.
+      expect(provider.getContractInfo().version).not.toBe('0.1.0');
+    });
+
+    it('should report the version as unknown when it is not configured', async () => {
+      const moduleWithoutVersion: TestingModule =
+        await Test.createTestingModule({
+          providers: [
+            ContractProvider,
+            {
+              provide: ConfigService,
+              useValue: {
+                get: jest.fn(() => undefined),
+                getOrThrow: jest.fn((key: string) => {
+                  const value = mockConfig[key as keyof typeof mockConfig];
+                  if (!value) {
+                    throw new Error(`Configuration key not found: ${key}`);
+                  }
+                  return value;
+                }),
+              },
+            },
+          ],
+        }).compile();
+
+      const providerWithoutVersion =
+        moduleWithoutVersion.get<ContractProvider>(ContractProvider);
+
+      expect(providerWithoutVersion.getContractInfo().version).toBe(
+        UNKNOWN_CONTRACT_VERSION,
+      );
     });
 
     it('should return consistent contract ID', () => {
@@ -369,12 +425,16 @@ describe('ContractProvider', () => {
       expect(result.timestamp).toBeInstanceOf(Date);
     });
 
-    it('should create RPC server with correct URL', async () => {
-      await provider.authorizeSweep(validParams);
-
+    it('should create RPC server with correct URL when constructed', async () => {
+      // #650: the connection is built once in the constructor, so it already
+      // exists before any sweep is authorized.
       expect(rpc.Server).toHaveBeenCalledWith(
         mockConfig['stellar.sorobanRpcUrl'],
       );
+      expect(rpc.Server).toHaveBeenCalledTimes(1);
+
+      await provider.authorizeSweep(validParams);
+
       expect(rpc.Server).toHaveBeenCalledTimes(1);
     });
 
@@ -1142,12 +1202,8 @@ describe('ContractProvider', () => {
     it('should execute complete authorization flow in correct order', async () => {
       const callOrder: string[] = [];
 
-      // Track calls using mock implementations
-      (rpc.Server as jest.Mock).mockImplementationOnce(() => {
-        callOrder.push('rpc.Server');
-        return mockRpcServer;
-      });
-
+      // #650: rpc.Server is not part of this order any more - it is built
+      // once in the constructor, before any of these calls.
       (Contract as jest.Mock).mockImplementationOnce(() => {
         callOrder.push('Contract');
         return mockContract;
@@ -1183,7 +1239,6 @@ describe('ContractProvider', () => {
       await provider.authorizeSweep(validParams);
 
       expect(callOrder).toEqual([
-        'rpc.Server',
         'Contract',
         'Address.fromString',
         'getAccount',
@@ -1201,7 +1256,11 @@ describe('ContractProvider', () => {
       expect(mockRpcServer.simulateTransaction).not.toHaveBeenCalled();
     });
 
-    it('should create only one RPC server instance per call', async () => {
+    it('should reuse a single RPC server instance across calls', async () => {
+      // #650: regression guard - building an rpc.Server per sweep added
+      // avoidable latency under load.
+      await provider.authorizeSweep(validParams);
+      await provider.authorizeSweep(validParams);
       await provider.authorizeSweep(validParams);
 
       expect(rpc.Server).toHaveBeenCalledTimes(1);
@@ -1554,6 +1613,63 @@ describe('ContractProvider', () => {
       );
 
       expect(hash1).toBe(hash2);
+    });
+  });
+
+  /**
+   * SECTION: Production signing guard (#457 criterion 3)
+   *
+   * `generateAuthSignature()` must refuse to sign when NODE_ENV is
+   * `production`, so a development/test seed cannot be used in a real
+   * deployment. The guard's own semantics (casing, whitespace, unset) are
+   * covered in `sweep-signing-guard.util.spec.ts`; this block asserts the
+   * provider actually calls it, because an unwired guard is a guard that
+   * does not exist.
+   */
+  describe('Sweep signing production guard (#457)', () => {
+    const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+
+    afterEach(() => {
+      if (ORIGINAL_NODE_ENV === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+      }
+    });
+
+    it('refuses to sign when NODE_ENV is production', () => {
+      process.env.NODE_ENV = 'production';
+
+      expect(() => provider.generateAuthSignature(validParams)).toThrow(
+        /Refusing to sign sweep authorizations/,
+      );
+    });
+
+    it('does not sign when the guard refuses, even via authorizeSweep()', async () => {
+      process.env.NODE_ENV = 'production';
+
+      // authorizeSweep() wraps failures in InternalServerErrorException, so the
+      // guard's message survives inside it.
+      await expect(provider.authorizeSweep(validParams)).rejects.toThrow(
+        /Refusing to sign sweep authorizations/,
+      );
+      // The signature must never have reached the contract call.
+      expect(mockContract.call).not.toHaveBeenCalled();
+    });
+
+    it.each(['development', 'test', 'staging'])(
+      'allows signing when NODE_ENV is %p',
+      (nodeEnv) => {
+        process.env.NODE_ENV = nodeEnv;
+
+        expect(() => provider.generateAuthSignature(validParams)).not.toThrow();
+      },
+    );
+
+    it('allows signing when NODE_ENV is unset', () => {
+      delete process.env.NODE_ENV;
+
+      expect(() => provider.generateAuthSignature(validParams)).not.toThrow();
     });
   });
 });

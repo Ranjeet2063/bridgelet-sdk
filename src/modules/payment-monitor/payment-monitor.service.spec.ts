@@ -114,6 +114,7 @@ describe('PaymentMonitorService', () => {
           'stellar.contracts.ephemeralAccount': 'CONTRACT123',
           'stellar.fundingSecret': 'SFUNDING_SECRET',
           'stellar.network': 'testnet',
+          'app.paymentPollIntervalMs': '30000',
         };
         if (!(key in map)) throw new Error(`Config key not found: ${key}`);
         return map[key];
@@ -152,27 +153,27 @@ describe('PaymentMonitorService', () => {
   // -------------------------------------------------------------------------
 
   describe('onModuleInit / onModuleDestroy', () => {
-    it('starts a setInterval on init and clears it on destroy', () => {
+    it('starts an interval runner on init and clears it on destroy', () => {
       onModuleInitSpy.mockRestore();
 
-      const intervalHandle = setInterval(() => undefined, 1_000);
-      clearInterval(intervalHandle);
+      const timeoutHandle = setTimeout(() => undefined, 1_000);
+      clearTimeout(timeoutHandle);
 
-      const setIntervalSpy = jest
-        .spyOn(global, 'setInterval')
-        .mockReturnValue(intervalHandle);
-      const clearIntervalSpy = jest
-        .spyOn(global, 'clearInterval')
+      const setTimeoutSpy = jest
+        .spyOn(global, 'setTimeout')
+        .mockReturnValue(timeoutHandle);
+      const clearTimeoutSpy = jest
+        .spyOn(global, 'clearTimeout')
         .mockImplementation(() => undefined);
 
       service.onModuleInit();
-      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
 
       service.onModuleDestroy();
-      expect(clearIntervalSpy).toHaveBeenCalledWith(intervalHandle);
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(timeoutHandle);
 
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
     });
   });
 
@@ -188,14 +189,20 @@ describe('PaymentMonitorService', () => {
     });
 
     it('skips expired accounts by querying only non-expired ones', async () => {
-      // The repo query includes expiresAt filter; if none returned, Horizon is never called.
-      // Simulate the DB returning zero results (expired accounts are already filtered by the WHERE clause)
+      // Issue #721: the expiresAt predicate is what keeps the poller from
+      // querying Horizon for accounts SchedulerService is about to expire.
+      // Assert the operator itself, not just the status filter — removing it
+      // or inverting it is the regression this test exists to catch.
       accountsRepo.find.mockResolvedValueOnce([]);
       await service.pollAllAccounts();
       expect(accountsRepo.find).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
             status: AccountStatus.PENDING_PAYMENT,
+            expiresAt: expect.objectContaining({
+              type: 'moreThan',
+              value: expect.any(Date),
+            }),
           }),
         }),
       );
@@ -276,6 +283,124 @@ describe('PaymentMonitorService', () => {
       const result = await service.findInboundPayment(account);
       expect(result).toBeNull();
     });
+
+    // -----------------------------------------------------------------------
+    // Horizon pagination (#717)
+    // -----------------------------------------------------------------------
+
+    it('follows Horizon pagination (page.next()) when matching payment is on a subsequent page', async () => {
+      const account = makeAccount({
+        createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      });
+
+      const expectedPayment = makePaymentRecord({
+        paging_token: '1002',
+        amount: '500.0000000',
+        created_at: '2024-01-01T02:00:00Z',
+      });
+
+      const page2 = {
+        records: [expectedPayment],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue({ records: [] }),
+      };
+
+      const page1 = {
+        records: [
+          // Multiple small payments or operations before account.createdAt on page 1
+          makePaymentRecord({
+            paging_token: '1000',
+            amount: '1.0000000',
+            created_at: '2023-12-31T23:59:59Z',
+          }),
+          makePaymentRecord({
+            paging_token: '1001',
+            amount: '2.0000000',
+            created_at: '2023-12-31T23:59:59Z',
+          }),
+        ],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue(page2),
+      };
+
+      mockCallFn.mockResolvedValueOnce(page1);
+
+      const result = await service.findInboundPayment(account);
+
+      expect(page1.next).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(expectedPayment);
+    });
+
+    it('traverses multiple pages via paging tokens until the expected payment is found', async () => {
+      const account = makeAccount({
+        createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      });
+
+      const expectedPayment = makePaymentRecord({
+        paging_token: '3000',
+        amount: '100.0000000',
+        created_at: '2024-01-01T05:00:00Z',
+      });
+
+      const page3 = {
+        records: [expectedPayment],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue({ records: [] }),
+      };
+
+      const page2 = {
+        records: [
+          makePaymentRecord({
+            paging_token: '2000',
+            to: 'GOTHER_ACCOUNT',
+          }),
+        ],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue(page3),
+      };
+
+      const page1 = {
+        records: [
+          makePaymentRecord({
+            paging_token: '1000',
+            created_at: '2023-12-31T00:00:00Z',
+          }),
+        ],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue(page2),
+      };
+
+      mockCallFn.mockResolvedValueOnce(page1);
+
+      const result = await service.findInboundPayment(account);
+
+      expect(page1.next).toHaveBeenCalledTimes(1);
+      expect(page2.next).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(expectedPayment);
+    });
+
+    it('stops paginating and returns null when page.next() returns empty records', async () => {
+      const account = makeAccount({
+        createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      });
+
+      const page2 = {
+        records: [],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue({ records: [] }),
+      };
+
+      const page1 = {
+        records: [
+          makePaymentRecord({
+            paging_token: '1000',
+            created_at: '2023-12-31T00:00:00Z',
+          }),
+        ],
+        next: jest.fn<() => Promise<any>>().mockResolvedValue(page2),
+      };
+
+      mockCallFn.mockResolvedValueOnce(page1);
+
+      const result = await service.findInboundPayment(account);
+
+      expect(page1.next).toHaveBeenCalledTimes(1);
+      expect(result).toBeNull();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -308,6 +433,35 @@ describe('PaymentMonitorService', () => {
   // -------------------------------------------------------------------------
 
   describe('failure isolation', () => {
+    it('processes successful accounts in a mixed batch and logs the failed account', async () => {
+      const acc1 = makeAccount({ id: 'a1', publicKey: 'GPK1' });
+      const acc2 = makeAccount({ id: 'a2', publicKey: 'GPK2' });
+      const acc3 = makeAccount({ id: 'a3', publicKey: 'GPK3' });
+      accountsRepo.find.mockResolvedValueOnce([acc1, acc2, acc3]);
+
+      mockCallFn
+        .mockResolvedValueOnce({
+          records: [makePaymentRecord({ to: 'GPK1' })],
+        })
+        .mockRejectedValueOnce(new Error('Horizon unavailable'))
+        .mockResolvedValueOnce({ records: [] });
+      const loggerError = jest
+        .spyOn((service as any).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      await expect(service.pollAllAccounts()).resolves.not.toThrow();
+
+      expect(mockPaymentsBuilder.forAccount).toHaveBeenCalledTimes(3);
+      expect(stellarService.recordPayment).toHaveBeenCalledTimes(1);
+      expect(accountsRepo.update).toHaveBeenCalledWith(
+        { id: 'a1', status: AccountStatus.PENDING_PAYMENT },
+        { status: AccountStatus.PENDING_CLAIM },
+      );
+      expect(loggerError).toHaveBeenCalledWith(
+        'Poll tick failed for account a2 (GPK2): Horizon unavailable',
+      );
+    });
+
     it('continues polling other accounts when one Horizon call fails', async () => {
       const acc1 = makeAccount({ id: 'a1', publicKey: 'GPK1' });
       const acc2 = makeAccount({ id: 'a2', publicKey: 'GPK2' });

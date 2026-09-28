@@ -1,3 +1,79 @@
+# Sweeps Module
+
+Moves funds out of an ephemeral account into a destination account, gated by an
+on-chain authorization from the `SweepController` Soroban contract.
+
+## Sweep Flow
+
+This is the authoritative description of the flow. It previously existed only as
+a comment on `SweepsService.executeSweep`, so it had to be reverse-engineered
+from code (#651).
+
+> Verified for #712 (duplicate of the already-resolved #651, fixed in PR #778).
+
+The order of operations is strict and intentional:
+
+1. **Validate** - `ValidationProvider.validateSweepParameters()` checks the
+   request before anything touches the network.
+2. **Authorize (sign)** - `ContractProvider.generateAuthSignature()` signs the
+   destination and the contract nonce with the sweep signing key.
+3. **Authorize (submit)** - `SweepController.execute_sweep()` is invoked on
+   Soroban, moving the contract into `Swept` state.
+4. **Transfer** - `TransactionProvider.executeSweepTransaction()` submits a
+   classic payment to Horizon, actually moving the funds.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant S as SweepsService
+    participant V as ValidationProvider
+    participant K as ContractProvider
+    participant T as TransactionProvider
+    participant SR as Soroban RPC
+    participant H as Horizon
+
+    C->>S: executeSweep(request)
+
+    S->>V: 1. validateSweepParameters(request)
+    V-->>S: ok (throws otherwise)
+
+    S->>K: 2. generateAuthSignature(destination, nonce)
+    K-->>S: signature
+
+    S->>K: 3. SweepController.execute_sweep()
+    K->>SR: simulate + submit
+    SR-->>K: auth result
+    K-->>S: contractAuthHash
+
+    Note over S,H: Past this point the contract is in Swept state.
+
+    S->>T: 4. executeSweepTransaction(params)
+    T->>H: submit payment
+    H-->>T: hash, ledger, successful
+    T-->>S: TransactionResult
+
+    S-->>C: SweepResult
+```
+
+### Failure between steps 3 and 4
+
+If step 3 succeeds and step 4 fails, the contract is in `Swept` state but **no
+funds have moved**. This is logged as a critical error for manual recovery and
+is deliberately **not** retried automatically - re-invoking `execute_sweep()`
+would revert on-chain.
+
+The retry path is driven by the orchestrator (`ClaimRedemptionProvider`), which
+re-enters with `skipContractAuth: true`. `SweepsService` then synthesises the
+auth hash deterministically from the same inputs, so the audit trail is
+preserved without touching the contract again.
+
+### Reclaiming the base reserve
+
+The flow above is payment-only, so the ephemeral account's base reserve stays
+locked up. `TransactionProvider.mergeAccount()` implements the alternative
+`AccountMerge` strategy that also reclaims the reserve, but `SweepsService`
+never calls it - treat it as available but not wired into the live flow.
+
 ## Usage
 
 ### Execute a Sweep
@@ -83,7 +159,7 @@ npm run test:cov -- sweeps
 1. Create funded ephemeral account on testnet
 2. Execute sweep with valid parameters:
 
-````bash
+```bash
 curl -X POST http://localhost:3000/api/sweeps \
   -H "Content-Type: application/json" \
   -d '{
@@ -94,6 +170,8 @@ curl -X POST http://localhost:3000/api/sweeps \
     "amount": "100",
     "asset": "native"
     }'
+```
+
 3. Verify transaction on Stellar Explorer
 4. Check destination account received funds
 5. Verify ephemeral account merged (if successful)
@@ -101,6 +179,7 @@ curl -X POST http://localhost:3000/api/sweeps \
 ## Configuration
 
 ### Required Environment Variables
+
 ```env
 # Stellar Network
 STELLAR_NETWORK=testnet
@@ -109,7 +188,7 @@ STELLAR_SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 
 # Smart Contract
 EPHEMERAL_ACCOUNT_CONTRACT_ID=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-````
+```
 
 ### Network Selection
 
@@ -135,16 +214,28 @@ Network determines:
 ### Security Considerations
 
 1. **Secret Key Handling:**
+
    - Ephemeral secrets are temporary
    - Never log secret keys
    - Clear from memory after use
 
 2. **Authorization Signatures:**
-   - MVP uses dummy signatures
-   - Production must implement proper Ed25519 signing
-   - Use authorized SDK keys
+
+   - Real Ed25519 signing is implemented (#457). `SweepSignerUtil.sign()`
+     produces a 64-byte signature over
+     `SHA256( destination_xdr ‖ nonce_be_u64 ‖ controller_xdr )`, matching
+     `construct_sweep_message` in bridgelet-core's
+     `contracts/sweep_controller/src/authorization.rs`.
+   - The output is pinned byte-for-byte by
+     `src/common/crypto/sweep-signer.util.spec.ts` against vectors generated
+     by bridgelet-core's own `tools/sweep-signer`, so a change to the wire
+     format in either repo fails CI.
+   - The signing key must be the `authorized_signer` registered in
+     SweepController storage. A development seed is refused in production
+     configurations — see `SweepSigningGuard` (#457).
 
 3. **Transaction Verification:**
+
    - Always verify transaction success
    - Check ledger confirmation
    - Monitor for failed transactions
@@ -158,15 +249,24 @@ Network determines:
 
 ### Short Term
 
-1. **Production Signature Implementation:**
-   - Replace dummy signatures with real Ed25519
-   - Sign with authorized SDK private key
-   - Verify signatures in contract
+1. **On-Chain Authorization Enforcement** (the real remaining gap, #457):
 
-2. **On-Chain Authorization Enforcement:**
-   - Submit contract transactions
-   - Enforce authorization on-chain
-   - Store sweep records in contract
+   - `authorizeSweep()` builds and simulates the `sweep` call but **never
+     submits it**, so no signature reaches the chain and `authorized: true`
+     reflects a successful simulation only. Recording this rather than fixing
+     it — it is a separate, larger change.
+   - On bridgelet-core, `EphemeralAccount::verify_sweep_authorization` is
+     still a stub that ignores its `auth_signature` and relies on
+     `authorized_controller.require_auth()`.
+     `SweepController::verify_sweep_auth` is fully implemented with a real
+     `env.crypto().ed25519_verify`.
+
+2. **Production Key Management:**
+
+   - The signing seed is read from the environment; there is no HSM/KMS
+     integration
+   - `SweepSigningGuard` blocks production deployments from using a dev seed
+     until a real key source exists
 
 3. **Enhanced Validation:**
    - Check destination account exists
@@ -176,16 +276,19 @@ Network determines:
 ### Long Term
 
 1. **Batch Sweeps:**
+
    - Sweep multiple accounts in one transaction
    - Reduce transaction fees
    - Improve efficiency
 
 2. **Gas Optimization:**
+
    - Optimize contract calls
    - Reduce transaction sizes
    - Minimize operations
 
 3. **Monitoring & Alerts:**
+
    - Real-time sweep monitoring
    - Alert on failures
    - Track success rates

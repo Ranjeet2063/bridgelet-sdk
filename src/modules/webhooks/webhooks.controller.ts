@@ -6,6 +6,7 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -14,6 +15,7 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiBody,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
@@ -46,15 +48,42 @@ export class WebhooksController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List registered webhook endpoints' })
+  @ApiOperation({
+    summary: 'List registered webhook endpoints',
+    description:
+      'Returns active subscriptions only, paginated with limit/offset. ' +
+      'Soft-deleted and paused subscriptions are excluded. Results are ' +
+      'ordered deterministically, so paging with a fixed limit/offset is ' +
+      'stable.',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description:
+      'Maximum number of records to return. Clamped to 1–100. ' +
+      'Non-integer values are rejected with 400.',
+    example: 50,
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    description:
+      'Records to skip. Clamped to 0–100000. Non-integer values are ' +
+      'rejected with 400.',
+    example: 0,
+  })
   @ApiResponse({
     status: 200,
     description: 'Active webhooks',
     type: [WebhookResponseDto],
   })
+  @ApiResponse({ status: 400, description: 'Invalid limit or offset' })
   @ApiResponse({ status: 401, description: 'Authentication required' })
-  public async findAll(): Promise<WebhookResponseDto[]> {
-    return this.webhooksService.findAll();
+  public async findAll(
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ): Promise<{ webhooks: WebhookResponseDto[]; total: number }> {
+    return this.webhooksService.findAll(limit, offset);
   }
 
   @Put(':id')

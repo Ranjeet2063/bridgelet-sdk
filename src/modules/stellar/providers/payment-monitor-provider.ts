@@ -6,6 +6,7 @@ import * as StellarSdk from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar.service.js';
 import { Account } from '../../../modules/accounts/entities/account.entity.js';
 import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
+import { assertValidAccountStatusTransition } from '../../accounts/enums/account-status-transition.util.js';
 
 /**
  * PaymentMonitorProvider - Horizon SSE-based payment detection
@@ -22,7 +23,36 @@ import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
  *
  * Idempotency:
  *   DuplicateAsset errors from the contract are treated as no-ops - the stream
- *   may emit duplicate events and that is handled here, not in StellarService.
+ *   may emit duplicate events and that is handled here, not in StellarService. *
+ * ## Relationship to PaymentMonitorService (#652)
+ *
+ * `PaymentMonitorService` (src/modules/payment-monitor/) does the same job by
+ * the opposite mechanism, and the names do not signal that. The split is not
+ * "raw Horizon access vs. orchestration" - both talk to Horizon directly, both
+ * call `StellarService.recordPayment()`, and both move the account to
+ * `PENDING_CLAIM`. The real difference is how a payment is discovered:
+ *
+ * | | PaymentMonitorProvider (this file) | PaymentMonitorService |
+ * |---|---|---|
+ * | Mechanism | push: Horizon SSE stream | pull: `setInterval` poll |
+ * | Scope | one stream per watched account | sweeps all `PENDING_PAYMENT` accounts |
+ * | Started by | `AccountsService` calling `watch()` on creation | `onModuleInit`, automatically |
+ * | Cadence | as Horizon emits | `PAYMENT_POLL_INTERVAL_MS` (default 30s) |
+ * | Registered in | `StellarModule` | `PaymentMonitorModule` |
+ *
+ * **Both are live at the same time.** `AppModule` imports `StellarModule` and
+ * `PaymentMonitorModule`, so a single payment is typically seen twice - once by
+ * the stream, once by the next poll. That is safe rather than accidental:
+ * `recordPayment()` is idempotent on the contract side (`DuplicateAsset` is
+ * treated as a no-op in both files) and the status change is a conditional
+ * update that only moves `PENDING_PAYMENT -> PENDING_CLAIM`, never backwards.
+ *
+ * Practical guidance: the poller is the safety net that catches anything the
+ * stream misses (dropped connection, restart before `restoreActiveStreams()`).
+ * Treat the stream as the low-latency path and the poller as the backstop, and
+ * keep any new detection logic idempotent in the same two ways.
+ *
+ * Verified for #713 (duplicate of the already-resolved #652, fixed in PR #778).
  */
 
 @Injectable()
@@ -213,16 +243,64 @@ export class PaymentMonitorProvider implements OnModuleDestroy {
   }
 
   private async markAccountPendingClaim(accountId: string): Promise<void> {
-    await this.accountsRepository.update(accountId, {
-      status: AccountStatus.PENDING_CLAIM,
-    });
+    // #445: the write is now *conditional* on the source status, matching
+    // `PaymentMonitorService.processPayment()` in the sibling module. This was
+    // previously unconditional, which created a real self-transition: the SSE
+    // stream stays open after the account reaches PENDING_CLAIM (it is only
+    // closed on a `DuplicateAsset`, which only fires for a repeated *asset*,
+    // not a different one), so a second inbound payment for a different asset
+    // re-entered this method and wrote PENDING_CLAIM over PENDING_CLAIM.
+    //
+    // That matters because the validator denies X -> X, and the correct fix is
+    // to stop emitting the redundant write, not to exempt this call site from
+    // validation: a conditional update is a no-op once the account has moved
+    // on, which is the idempotency the retry concern actually needs.
+    assertValidAccountStatusTransition(
+      AccountStatus.PENDING_PAYMENT,
+      AccountStatus.PENDING_CLAIM,
+      `paymentMonitorProvider.markAccountPendingClaim accountId=${accountId}`,
+    );
+
+    const result = await this.accountsRepository.update(
+      { id: accountId, status: AccountStatus.PENDING_PAYMENT },
+      { status: AccountStatus.PENDING_CLAIM },
+    );
+
+    if (result.affected === 0) {
+      this.logger.debug(
+        `Account ${accountId} was no longer PENDING_PAYMENT; ` +
+          `PENDING_CLAIM write skipped (already advanced by the poller or another stream event)`,
+      );
+      return;
+    }
+
     this.logger.log(`Account ${accountId} status → PENDING_CLAIM`);
   }
 
   private async markAccountFailed(accountId: string): Promise<void> {
-    await this.accountsRepository.update(accountId, {
-      status: AccountStatus.FAILED,
-    });
+    // #445: reached only from the non-retryable contract errors
+    // TooManyPayments / InvalidAmount, on an account this stream has been
+    // watching — i.e. PENDING_PAYMENT. Conditional for the same reason as
+    // above: an unconditional write could clobber an account that had already
+    // advanced to PENDING_CLAIM, moving it *backwards* into FAILED.
+    assertValidAccountStatusTransition(
+      AccountStatus.PENDING_PAYMENT,
+      AccountStatus.FAILED,
+      `paymentMonitorProvider.markAccountFailed accountId=${accountId}`,
+    );
+
+    const result = await this.accountsRepository.update(
+      { id: accountId, status: AccountStatus.PENDING_PAYMENT },
+      { status: AccountStatus.FAILED },
+    );
+
+    if (result.affected === 0) {
+      this.logger.warn(
+        `Account ${accountId} was no longer PENDING_PAYMENT; FAILED write skipped`,
+      );
+      return;
+    }
+
     this.logger.warn(`Account ${accountId} status → FAILED`);
   }
 

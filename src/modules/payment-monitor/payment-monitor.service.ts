@@ -11,11 +11,54 @@ import * as StellarSdk from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar/stellar.service.js';
 import { Account } from '../accounts/entities/account.entity.js';
 import { AccountStatus } from '../accounts/enums/account-status.enum.js';
+import { assertValidAccountStatusTransition } from '../accounts/enums/account-status-transition.util.js';
+import { IntervalJobRunner } from '../../common/utils/interval-job-runner.js';
 
+/**
+ * PaymentMonitorService - interval-based payment detection.
+ *
+ * Polls Horizon on a fixed interval for inbound payments to every account still
+ * in `PENDING_PAYMENT`. For each payment found it calls
+ * `StellarService.recordPayment()` to register it on the contract and moves the
+ * account to `PENDING_CLAIM`.
+ *
+ * Lifecycle:
+ *   - onModuleInit()     starts the poll loop (PAYMENT_POLL_INTERVAL_MS, default 30000)
+ *   - pollAllAccounts()  one pass over all PENDING_PAYMENT, unexpired accounts
+ *   - onModuleDestroy()  clears the interval
+ *
+ * ## Relationship to PaymentMonitorProvider (#652)
+ *
+ * `PaymentMonitorProvider` (src/modules/stellar/providers/) does the same job
+ * by the opposite mechanism, and the names do not signal that. The split is not
+ * "raw Horizon access vs. orchestration" - both talk to Horizon directly, both
+ * call `StellarService.recordPayment()`, and both move the account to
+ * `PENDING_CLAIM`. The real difference is how a payment is discovered:
+ *
+ * | | PaymentMonitorService (this file) | PaymentMonitorProvider |
+ * |---|---|---|
+ * | Mechanism | pull: `setInterval` poll | push: Horizon SSE stream |
+ * | Scope | sweeps all `PENDING_PAYMENT` accounts | one stream per watched account |
+ * | Started by | `onModuleInit`, automatically | `AccountsService` calling `watch()` |
+ * | Cadence | `PAYMENT_POLL_INTERVAL_MS` (default 30s) | as Horizon emits |
+ * | Registered in | `PaymentMonitorModule` | `StellarModule` |
+ *
+ * **Both are live at the same time.** `AppModule` imports both modules, so a
+ * single payment is typically seen twice - once by the stream, once by the next
+ * poll. That is safe rather than accidental: `recordPayment()` is idempotent on
+ * the contract side (`DuplicateAsset` is treated as a no-op in both files) and
+ * the status change is a conditional update that only moves
+ * `PENDING_PAYMENT -> PENDING_CLAIM`, never backwards.
+ *
+ * Practical guidance: this poller is the safety net that catches anything the
+ * stream misses (dropped connection, restart before `restoreActiveStreams()`).
+ * Treat the stream as the low-latency path and this as the backstop, and keep
+ * any new detection logic idempotent in the same two ways.
+ */
 @Injectable()
 export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PaymentMonitorService.name);
-  private intervalHandle: ReturnType<typeof setInterval> | null = null;
+  private pollRunner: IntervalJobRunner | null = null;
   private horizonServer: StellarSdk.Horizon.Server;
 
   constructor(
@@ -30,30 +73,37 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    const intervalMs = parseInt(
-      process.env.PAYMENT_POLL_INTERVAL_MS ?? '30000',
-      10,
+    const intervalMs = Number(
+      this.configService.getOrThrow<number>('app.paymentPollIntervalMs'),
     );
-    this.intervalHandle = setInterval(
-      () => void this.pollAllAccounts(),
+    this.pollRunner = new IntervalJobRunner({
       intervalMs,
-    );
+      jitterMs: Math.min(Math.floor(intervalMs * 0.1), 5_000),
+      task: () => this.pollAllAccounts(),
+      onError: (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Payment monitor polling failed: ${message}`);
+      },
+    });
+    this.pollRunner.start();
     this.logger.log(
       `Payment monitor polling started (interval: ${intervalMs}ms)`,
     );
   }
 
   onModuleDestroy(): void {
-    if (this.intervalHandle !== null) {
-      clearInterval(this.intervalHandle);
-      this.intervalHandle = null;
-    }
+    this.pollRunner?.stop();
+    this.pollRunner = null;
     this.logger.log('Payment monitor polling stopped');
   }
 
   /**
    * Polls all non-expired PENDING_PAYMENT accounts for inbound Horizon payments.
-   * Per-account failures are isolated — one bad account does not stop the tick.
+   * The `expiresAt: MoreThan(now)` predicate is load-bearing: without it the
+   * poller keeps asking Horizon about accounts whose payment window has closed,
+   * i.e. exactly the rows `SchedulerService.runExpiryJob()` is about to move to
+   * EXPIRED (#721). Per-account failures are isolated — one bad account does
+   * not stop the tick.
    */
   async pollAllAccounts(): Promise<void> {
     const now = new Date();
@@ -95,7 +145,7 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
   async findInboundPayment(
     account: Account,
   ): Promise<StellarSdk.Horizon.ServerApi.PaymentOperationRecord | null> {
-    const page = await this.horizonServer
+    let page = await this.horizonServer
       .payments()
       .forAccount(account.publicKey)
       .order('asc')
@@ -104,13 +154,26 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
 
     const cutoff = account.createdAt.toISOString();
 
-    for (const record of page.records) {
-      if ((record.type as string) !== 'payment') continue;
-      const payment =
-        record as StellarSdk.Horizon.ServerApi.PaymentOperationRecord;
-      if (payment.to !== account.publicKey) continue;
-      if (payment.created_at < cutoff) continue;
-      return payment;
+    while (page && page.records) {
+      for (const record of page.records) {
+        if ((record.type as string) !== 'payment') continue;
+        const payment =
+          record as StellarSdk.Horizon.ServerApi.PaymentOperationRecord;
+        if (payment.to !== account.publicKey) continue;
+        if (payment.created_at < cutoff) continue;
+        return payment;
+      }
+
+      // Follow Horizon's paging token / next page link if current page had records
+      if (page.records.length > 0 && typeof (page as any).next === 'function') {
+        const nextPage = await (page as any).next();
+        if (!nextPage || !nextPage.records || nextPage.records.length === 0) {
+          break;
+        }
+        page = nextPage;
+      } else {
+        break;
+      }
     }
 
     return null;
@@ -148,6 +211,23 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
         throw err;
       }
     }
+
+    // #445: the conditional update below is the *mechanism* that makes this
+    // safe — it matches on the source status, so it cannot move an account
+    // backwards and is a no-op if the account already moved on. The validator
+    // is the complementary *guard*: it catches "I typed the wrong constant"
+    // at development time. Neither replaces the other — see the design notes in
+    // account-status-transition.util.ts.
+    //
+    // `account.status` is PENDING_PAYMENT: pollAllAccounts() only selects
+    // accounts in that status. Asserting the intended edge explicitly (rather
+    // than trusting the query) is what makes the two mechanisms checkable
+    // against each other.
+    assertValidAccountStatusTransition(
+      AccountStatus.PENDING_PAYMENT,
+      AccountStatus.PENDING_CLAIM,
+      `paymentMonitorService.processPayment accountId=${account.id}`,
+    );
 
     // Atomic: only transition from PENDING_PAYMENT → PENDING_CLAIM, never backwards
     await this.accountsRepository.update(

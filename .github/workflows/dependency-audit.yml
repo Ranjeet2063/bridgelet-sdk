@@ -1,0 +1,46 @@
+name: Dependency Audit
+
+on:
+  pull_request:
+    branches: ['main', 'develop']
+
+jobs:
+  audit:
+    name: npm audit (high/critical blocks merge)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run npm audit (high/critical, baseline-exempt)
+        # Packages already documented as known findings in SECURITY_AUDIT.md
+        # (including the @stellar/stellar-sdk pin exception) are baselined so
+        # this gate blocks NEW high/critical advisories, not today's tracked
+        # debt. Adding a package here requires a matching entry in
+        # SECURITY_AUDIT.md — no ad-hoc suppression.
+        run: |
+          npm audit --audit-level=high --omit=dev --json > audit.json || true
+          node -e "
+            const baseline = new Set(['js-yaml','multer','protobufjs','qs','toml','typeorm','@nestjs/swagger','@nestjs/platform-express','@stellar/stellar-sdk','@opentelemetry/auto-instrumentations-node','@opentelemetry/propagator-jaeger','@opentelemetry/sdk-node','brace-expansion']);
+            const { vulnerabilities = {} } = JSON.parse(require('fs').readFileSync('audit.json', 'utf8'));
+            const newFindings = Object.entries(vulnerabilities).filter(
+              ([name, v]) => !baseline.has(name) && ['high', 'critical'].includes(v.severity),
+            );
+            if (newFindings.length) {
+              console.error('New high/critical advisories outside the documented baseline:');
+              newFindings.forEach(([name, v]) => console.error(\`  \${name} (\${v.severity})\`));
+              process.exit(1);
+            }
+            console.log('No new high/critical advisories beyond the documented baseline.');
+          "

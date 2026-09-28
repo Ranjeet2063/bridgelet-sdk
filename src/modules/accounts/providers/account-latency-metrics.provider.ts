@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Histogram, Registry, register } from 'prom-client';
 
 interface HistogramBucket {
   upperBoundMs: number;
@@ -15,6 +16,23 @@ const P99_ALERT_THRESHOLD_MS = 5_000;
 
 const DEFAULT_BUCKETS_MS = [50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000];
 
+/**
+ * AccountLatencyMetricsProvider
+ *
+ * Records account-creation latency and keeps two parallel representations of
+ * the same data (issue #676):
+ *
+ *  1. In-memory samples and cumulative buckets, read via `getBuckets()`,
+ *     `getP99Ms()` and friends. These drive the p99 alert log.
+ *  2. A Prometheus `Histogram` registered on the default registry, so the
+ *     latency distribution is actually exposed on `/metrics` and can be
+ *     asserted against with `registry.getSingleMetric(name).get()`.
+ *
+ * Previously only (1) existed, and nothing outside this class' own unit tests
+ * ever called `getBuckets()` — the latency distribution was computed but never
+ * scraped, so a misconfigured bucket boundary or a swapped success label would
+ * have gone unnoticed in production.
+ */
 @Injectable()
 export class AccountLatencyMetricsProvider {
   private readonly logger = new Logger(AccountLatencyMetricsProvider.name);
@@ -23,6 +41,23 @@ export class AccountLatencyMetricsProvider {
     upperBoundMs: b,
     count: 0,
   }));
+  private readonly latencyHistogram: Histogram;
+
+  constructor(private readonly registry: Registry = register) {
+    const existing = this.registry.getSingleMetric(
+      'account_creation_latency_ms',
+    );
+    this.latencyHistogram =
+      (existing as Histogram | undefined) ??
+      new Histogram({
+        name: 'account_creation_latency_ms',
+        help: 'Account creation latency in milliseconds',
+        // Must stay in sync with DEFAULT_BUCKETS_MS so the Prometheus view and
+        // the in-memory view cannot disagree.
+        buckets: DEFAULT_BUCKETS_MS,
+        registers: [this.registry],
+      });
+  }
 
   record(durationMs: number, success: boolean): void {
     this.samples.push({ durationMs, success, recordedAt: new Date() });
@@ -31,6 +66,7 @@ export class AccountLatencyMetricsProvider {
         bucket.count++;
       }
     }
+    this.latencyHistogram.observe(durationMs);
     this.checkAlert(durationMs);
   }
 

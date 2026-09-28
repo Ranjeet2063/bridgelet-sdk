@@ -6,13 +6,14 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import jwt from 'jsonwebtoken';
 import * as crypto from 'crypto';
 import { Account } from '../../accounts/entities/account.entity.js';
 import { ClaimVerificationResponseDto } from '../dto/claim-verification-response.dto.js';
 import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
+import { verifyClaimTokenWithRotation } from '../../../common/guards/jwt-rotation.util.js';
 
 const { TokenExpiredError, JsonWebTokenError } = jwt;
 
@@ -43,9 +44,12 @@ export class TokenVerificationProvider {
       // Hash the token to look up the associated account
       const tokenHash = this.hashToken(token);
 
-      // Find the account by token hash
+      // Find the account by token hash. deletedAt: IsNull() is explicit
+      // here (issue #435 audit) even though @DeleteDateColumn already
+      // excludes soft-deleted rows, so a soft-deleted account's claim
+      // token can never verify.
       const account = await this.accountRepository.findOne({
-        where: { claimTokenHash: tokenHash },
+        where: { claimTokenHash: tokenHash, deletedAt: IsNull() },
       });
 
       if (!account) {
@@ -97,7 +101,14 @@ export class TokenVerificationProvider {
     try {
       const jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
 
-      const payload = jwt.verify(token, jwtSecret) as ClaimTokenPayload;
+      // Verifies against the active secret, falling back to JWT_SECRET_PREVIOUS
+      // while a rotation window is open (issue #683). Claim tokens can be valid
+      // for up to CLAIM_TOKEN_EXPIRY, so a rotation without a grace window
+      // would strand every unclaimed token in flight.
+      const payload = verifyClaimTokenWithRotation<ClaimTokenPayload>(
+        token,
+        jwtSecret,
+      );
 
       // Verify token type is 'claim'
       if (payload.type !== 'claim') {

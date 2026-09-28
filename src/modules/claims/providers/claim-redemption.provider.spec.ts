@@ -243,6 +243,58 @@ describe('ClaimRedemptionProvider', () => {
       await p.redeemClaim(VALID_TOKEN, VALID_DESTINATION);
       expect(ds.transaction).toHaveBeenCalledTimes(2);
     });
+
+    it('fires sweep.completed exactly once (issue #632)', async () => {
+      await provider.redeemClaim(VALID_TOKEN, VALID_DESTINATION);
+
+      const completedCalls = mockWebhooksService.triggerEvent.mock.calls.filter(
+        ([event]) => event === 'sweep.completed',
+      );
+      expect(completedCalls).toHaveLength(1);
+      expect(mockWebhooksService.triggerEvent).not.toHaveBeenCalledWith(
+        'sweep.failed',
+        expect.anything(),
+      );
+    });
+  });
+
+  // Issue #641 (re-verified against #702): sweep.completed/sweep.failed must
+  // each fire exactly once, and never both, for a single redemption. The two
+  // triggers sit in mutually-exclusive branches (success vs. catch), and the
+  // isPartial branch returns before either can run, so at most one of
+  // sweep.completed/sweep.failed/sweep.partial fires per redemption attempt.
+  describe('redeemClaim - webhook exactly-once guarantees (issue #641)', () => {
+    it('fires sweep.completed exactly once and never sweep.failed on success', async () => {
+      await provider.redeemClaim(VALID_TOKEN, VALID_DESTINATION);
+
+      const completedCalls = mockWebhooksService.triggerEvent.mock.calls.filter(
+        ([event]) => event === 'sweep.completed',
+      );
+      const failedCalls = mockWebhooksService.triggerEvent.mock.calls.filter(
+        ([event]) => event === 'sweep.failed',
+      );
+      expect(completedCalls).toHaveLength(1);
+      expect(failedCalls).toHaveLength(0);
+    });
+
+    it('fires sweep.failed exactly once and never sweep.completed when the sweep throws', async () => {
+      const ds = makeHappyPathDataSource();
+      const p = await buildModule(ds);
+      mockSweepsService.executeSweep.mockRejectedValue(new Error('boom'));
+
+      await expect(
+        p.redeemClaim(VALID_TOKEN, VALID_DESTINATION),
+      ).rejects.toThrow('boom');
+
+      const completedCalls = mockWebhooksService.triggerEvent.mock.calls.filter(
+        ([event]) => event === 'sweep.completed',
+      );
+      const failedCalls = mockWebhooksService.triggerEvent.mock.calls.filter(
+        ([event]) => event === 'sweep.failed',
+      );
+      expect(failedCalls).toHaveLength(1);
+      expect(completedCalls).toHaveLength(0);
+    });
   });
 
   describe('redeemClaim - idempotency for already-claimed accounts', () => {
@@ -370,6 +422,23 @@ describe('ClaimRedemptionProvider', () => {
       await expect(
         p.redeemClaim(VALID_TOKEN, VALID_DESTINATION),
       ).rejects.toThrow('Stellar network error');
+    });
+
+    it('fires the sweep.failed webhook exactly once (issue #632)', async () => {
+      const ds = makeHappyPathDataSource();
+      const p = await buildModule(ds);
+      mockSweepsService.executeSweep.mockRejectedValue(
+        new Error('Stellar network error'),
+      );
+
+      await expect(
+        p.redeemClaim(VALID_TOKEN, VALID_DESTINATION),
+      ).rejects.toThrow();
+
+      const failedCalls = mockWebhooksService.triggerEvent.mock.calls.filter(
+        ([event]) => event === 'sweep.failed',
+      );
+      expect(failedCalls).toHaveLength(1);
     });
   });
 
@@ -528,6 +597,77 @@ describe('ClaimRedemptionProvider', () => {
           contractAuthHash: 'partial-auth-hash',
         }),
       );
+    });
+
+    it('fires sweep.partial exactly once and never the terminal events (issue #693)', async () => {
+      // The partial path is the third outcome, and the one most likely to
+      // double-fire: the provider returns from inside the try block, so a
+      // refactor that moved the trigger could plausibly also reach the catch.
+      // Assert the count, not just the presence.
+      const ds = {
+        transaction: jest
+          .fn()
+          .mockImplementationOnce(
+            async (cb: (m: unknown) => Promise<unknown>) =>
+              cb(makeManager(mockAccount)),
+          ),
+      };
+      const p = await buildModule(ds);
+      mockSweepsService.executeSweep.mockResolvedValueOnce({
+        success: false,
+        isPartial: true,
+        contractAuthHash: 'partial-auth-hash',
+        amountSwept: '100.0000000',
+        destination: VALID_DESTINATION,
+        error: 'Horizon offline',
+      });
+
+      await p.redeemClaim(VALID_TOKEN, VALID_DESTINATION);
+
+      const eventsFor = (name: string) =>
+        mockWebhooksService.triggerEvent.mock.calls.filter(
+          ([event]) => event === name,
+        );
+
+      expect(eventsFor('sweep.partial')).toHaveLength(1);
+      expect(eventsFor('sweep.completed')).toHaveLength(0);
+      expect(eventsFor('sweep.failed')).toHaveLength(0);
+      // Only one webhook of any kind fired for this redemption attempt.
+      expect(mockWebhooksService.triggerEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires sweep.partial exactly once when retrying a PARTIAL_SWEEP account', async () => {
+      // Retry path: entered as PARTIAL_SWEEP, partial again. Still one event.
+      const ds = {
+        transaction: jest
+          .fn()
+          .mockImplementationOnce(
+            async (cb: (m: unknown) => Promise<unknown>) =>
+              cb(
+                makeManager({
+                  ...mockAccount,
+                  status: AccountStatus.PARTIAL_SWEEP,
+                }),
+              ),
+          ),
+      };
+      const p = await buildModule(ds);
+      mockSweepsService.executeSweep.mockResolvedValueOnce({
+        success: false,
+        isPartial: true,
+        contractAuthHash: 'partial-auth-hash-2',
+        amountSwept: '100.0000000',
+        destination: VALID_DESTINATION,
+        error: 'Horizon still offline',
+      });
+
+      await p.redeemClaim(VALID_TOKEN, VALID_DESTINATION);
+
+      const partialCalls = mockWebhooksService.triggerEvent.mock.calls.filter(
+        ([event]) => event === 'sweep.partial',
+      );
+      expect(partialCalls).toHaveLength(1);
+      expect(mockWebhooksService.triggerEvent).toHaveBeenCalledTimes(1);
     });
 
     it('on sweep failure (throw) leaves the account in PARTIAL_SWEEP if it entered as PARTIAL_SWEEP', async () => {
