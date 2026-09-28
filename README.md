@@ -67,6 +67,26 @@ Ephemeral Stellar secret keys are encrypted at rest with AES-256-GCM (KMS-backed
 - **Blockchain:** Stellar SDK + Soroban RPC
 - **API:** REST api
 
+### Stellar SDK Version
+
+`@stellar/stellar-sdk` is pinned to an **exact version** (`14.6.1`) in `package.json` — no caret or tilde range. Do not "fix" this into `^14.6.1` (issue #446, originally pinned in #213):
+
+- The SDK exposes raw Stellar XDR and Soroban ScVal types. A minor or patch bump can change serialization behaviour — transaction building, `Address.toScVal().toXDR()` output, the sweep-authorization message preimage — and break contract calls in ways that only show up against a live network, not in unit tests.
+- An exact pin makes the dependency tree reproducible across developer machines and CI without relying on the lockfile being regenerated in lockstep with `package.json`.
+- A caret range does not just risk drift, it _hides_ it: `^14.6.1` silently admits `14.9.0`, so a routine `npm install` can change the bytes this service signs and submits without any commit touching the version.
+
+**Upgrade process** (manual, by hand — nothing upgrades the pin for you):
+
+1. Update the version in `package.json` to the new exact version.
+2. Run `npm install` to update `package-lock.json`.
+3. Run the full test suite: `npm test`.
+4. Manually test account creation, claim/redemption, sweep and expiry flows against **testnet** before merging.
+5. Only promote to production after all testnet checks pass.
+
+**Automated check.** `npm run check:stellar-sdk-pin` fails if `@stellar/stellar-sdk` is declared as anything other than an exact version — a caret, tilde, comparison range, wildcard, dist-tag, partial version, or a missing/empty value. It runs as its own named step in [CI](.github/workflows/ci.yml) ("Verify @stellar/stellar-sdk is pinned to an exact version") so a PR that loosens the pin is rejected with an explanation rather than a bare lint warning.
+
+**Upgrade notification.** [.github/workflows/stellar-sdk-update-notify.yml](.github/workflows/stellar-sdk-update-notify.yml) runs weekly, compares the pin against the version npm publishes as `latest`, and keeps a single tracking issue (label `dependency-update`) up to date. It never upgrades anything, cannot fail a build, and stays silent on the weeks when nothing has changed.
+
 ## Features
 
 - Account lifecycle management (create, claim, expire)
@@ -326,11 +346,8 @@ See [Getting Started Guide](./docs/getting-started.md) for full setup instructio
 
 ## Support
 
-(Nest)[https://nestjs.com](https://nestjs.com/)
+[NestJS](https://nestjs.com)
 
 ## License
 
 UNLICENSED
-#   C I   t r i g g e r 
- 
- 
