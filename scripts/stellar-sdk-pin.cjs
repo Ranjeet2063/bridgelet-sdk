@@ -14,7 +14,8 @@ const STELLAR_SDK_PACKAGE = '@stellar/stellar-sdk';
  * Anything carrying a range operator (`^`, `~`, `>=`, `||`, `-`, `*`, …) or
  * omitting a component fails this test, which is the entire point of the check.
  */
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const EXACT_VERSION =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 /** Shape of the parts of `package.json` this check reads. */
 // export interface PackageJsonLike {

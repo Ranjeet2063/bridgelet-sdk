@@ -15,11 +15,17 @@
 const fs = require('fs');
 const path = require('path');
 
-const { STELLAR_SDK_PACKAGE, describePinFailure, evaluateStellarSdkPin } = require('./stellar-sdk-pin.cjs');
+const {
+  STELLAR_SDK_PACKAGE,
+  describePinFailure,
+  evaluateStellarSdkPin,
+} = require('./stellar-sdk-pin.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
-const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+const pkg = JSON.parse(
+  fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'),
+);
 
 const result = evaluateStellarSdkPin(pkg);
 
