@@ -1,6 +1,7 @@
 import {
   SecretEncryptionUtil,
   type SecretFormat,
+  type KeyResolver,
 } from './secret-encryption.util.js';
 
 /**
@@ -44,9 +45,9 @@ export interface SecretKeyRing {
  */
 export class SecretRotationUtil {
   /**
-   * Builds a `SecretEncryptionUtil.KeyResolver` backed by a key ring.
+   * Builds a `KeyResolver` backed by a key ring.
    */
-  static keyResolver(ring: SecretKeyRing): SecretEncryptionUtil.KeyResolver {
+  static keyResolver(ring: SecretKeyRing): KeyResolver {
     const table: Record<string, string> = {
       ...(ring.previousKeys ?? {}),
       [ring.currentKeyId]: ring.currentKey,

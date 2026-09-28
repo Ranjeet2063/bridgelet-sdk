@@ -37,6 +37,10 @@ import * as crypto from 'crypto';
  * - Sourced from ENCRYPTION_KEY environment variable (or the KMS data key)
  * - Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
  */
+
+/** Resolves a key id to its 64-char hex key material. Returns undefined when unknown. */
+export type KeyResolver = (keyId: string) => string | undefined;
+
 export class SecretEncryptionUtil {
   private static readonly ALGORITHM = 'aes-256-gcm';
   private static readonly IV_LENGTH = 16;
@@ -51,7 +55,6 @@ export class SecretEncryptionUtil {
    * Resolves a key id to its 64-char hex key material. Returns undefined when
    * the id is unknown to the current key ring.
    */
-  static KeyResolver = (keyId: string) => string | undefined;
 
   static encrypt(plaintext: string, encryptionKey: string): string {
     return SecretEncryptionUtil.encryptWithKeyId(
@@ -116,7 +119,7 @@ export class SecretEncryptionUtil {
   static decrypt(
     encryptedString: string,
     encryptionKey: string,
-    keyResolver?: SecretEncryptionUtil.KeyResolver,
+    keyResolver?: KeyResolver,
   ): string {
     const key = SecretEncryptionUtil.parseKey(encryptionKey);
 
@@ -168,7 +171,7 @@ export class SecretEncryptionUtil {
    */
   private static decryptKeyIdTagged(
     body: string,
-    keyResolver: SecretEncryptionUtil.KeyResolver | undefined,
+    keyResolver: KeyResolver | undefined,
   ): string {
     const parts = body.split(':');
     if (parts.length !== 4) {
