@@ -269,6 +269,30 @@ deliberately.
 4. Run `./scripts/generate-migrations.sh --yes` and confirm `git diff` is empty — that's your proof the script and the folder agree. (If the new file is still uncommitted, commit it first, or pass `--force` to acknowledge the overwrite.)
 5. Update the migration list in [`README.md`](./README.md#installation) to include the new file.
 
+### Verifying `down()`
+
+`down()` is the half that is easy to skip and expensive to get wrong — a broken
+or missing `down()` only surfaces during a production rollback. Two ways to
+check it:
+
+- **One step at a time, against a real database:** `npm run migration:revert`
+  reverts only the most recently applied migration, so run it repeatedly to
+  walk the schema back to zero. Re-run it once more after the last migration
+  and confirm it reports no migrations to revert.
+- **Automated, no database to provision:** `npm run test:migrations` starts a
+  throwaway embedded PostgreSQL instance, applies every migration in the pinned
+  filename order, verifies the schema, reverts all of them, asserts the schema
+  is back to its pre-migration state, and then re-applies them and asserts the
+  schema matches again. This round trip is the check that catches a `down()`
+  that drops the wrong objects or leaves a table behind; add your migration to
+  the pinned list in `test/migrations.integration.runner.ts` when you add a new
+  file, and keep the list in the same order as the folder.
+
+Note that `down()` methods run in reverse filename order, which matters for the
+three migrations sharing a timestamp (see below): `CreateClaimAuditLogTable`
+reverts before `AddPartialSweepToAccountStatus`, which reverts before
+`AddDeletedAtToAccountsTable`.
+
 ### Notes on timestamps
 
 TypeORM orders migrations by the numeric timestamp in the filename, falling back to filename string comparison when timestamps tie. A few existing migrations (`1718100008000-*`) share a timestamp; their run order is preserved by the script exactly as it exists today (alphabetical: `AddDeletedAtToAccountsTable`, `AddPartialSweepToAccountStatus`, `CreateClaimAuditLogTable`). **Do not renumber existing migration timestamps** — any environment that already recorded these migration names in its `migrations` table would try to re-run them under new names. Give new migrations their own, later timestamp instead.

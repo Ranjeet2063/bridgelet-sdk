@@ -98,7 +98,11 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Polls all non-expired PENDING_PAYMENT accounts for inbound Horizon payments.
-   * Per-account failures are isolated — one bad account does not stop the tick.
+   * The `expiresAt: MoreThan(now)` predicate is load-bearing: without it the
+   * poller keeps asking Horizon about accounts whose payment window has closed,
+   * i.e. exactly the rows `SchedulerService.runExpiryJob()` is about to move to
+   * EXPIRED (#721). Per-account failures are isolated — one bad account does
+   * not stop the tick.
    */
   async pollAllAccounts(): Promise<void> {
     const now = new Date();

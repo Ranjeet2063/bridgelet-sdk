@@ -72,16 +72,38 @@ Settings are passed to the underlying `pg` Pool constructor via the TypeORM `ext
 
 ### accounts
 
-| Index name                      | Columns               | Query served                                                                                                                      |
-| ------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `IDX_accounts_publicKey`        | `publicKey`           | Account lookup by Stellar public key                                                                                              |
-| contractId                      | varchar(56), nullable | Stellar contract ID of the ephemeral account, set once Horizon + contract creation succeed (`stellar.contracts.ephemeralAccount`) |
-| `IDX_accounts_status`           | `status`              | Status-filtered API list (`GET /accounts?status=…`)                                                                               |
-| `IDX_accounts_claimTokenHash`   | `claimTokenHash`      | Token redemption lookup                                                                                                           |
-| `IDX_accounts_expiresAt`        | `expiresAt`           | Range scans on expiry timestamp                                                                                                   |
-| `IDX_accounts_status_expiresAt` | `status`, `expiresAt` | Expiry scheduler: `WHERE status IN (…) AND expiresAt < NOW()` — composite eliminates the bitmap AND step                          |
-| `IDX_accounts_status_createdAt` | `status`, `createdAt` | INITIALIZING cleanup: `WHERE status = 'initializing' AND createdAt < <cutoff>`                                                    |
-| `IDX_accounts_createdAt`        | `createdAt`           | Audit / time-boxed reporting range scans                                                                                          |
+Every index below is created by a migration, and the `Account` entity mirrors
+it with an `@Index` decorator so TypeORM's schema-sync check stays clean. The
+"Query served" column names the call site the index exists for: none of these
+indexes is declared anywhere near the query that needs it, so before dropping
+or renaming one, find that call site first. Because
+`scripts/generate-migrations.sh` is the source of truth for the migration
+files, a change to an index means a change there too.
+
+| Index name                      | Columns               | Added by  | Query served (call site)                                                                                                                                                                                                                                 |
+| ------------------------------- | --------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UQ_accounts_publicKey`         | `publicKey` (unique)  | `…000000` | Uniqueness enforced when an account is created. No read path filters on `publicKey` — API lookups are by `id`.                                                                                                                                           |
+| `IDX_accounts_publicKey`        | `publicKey`           | `…000000` | Mirrors the entity's `@Index('IDX_accounts_publicKey')` decorator; no query filters on `publicKey`.                                                                                                                                                      |
+| `IDX_accounts_status`           | `status`              | `…000000` | `AccountsService.findAll()` status predicate (`GET /accounts?status=…`); also usable as a left-prefix of the two composites below.                                                                                                                       |
+| `IDX_accounts_claimTokenHash`   | `claimTokenHash`      | `…000000` | Claim-token redemption: `ClaimRedemptionProvider.redeemClaim()` and `TokenVerificationProvider` (`where: { claimTokenHash, deletedAt: IsNull() }`).                                                                                                      |
+| `IDX_accounts_expiresAt`        | `expiresAt`           | `…000000` | Range scans on expiry with no status predicate; the two jobs below always carry a status predicate and use `IDX_accounts_status_expiresAt` instead.                                                                                                      |
+| `IDX_accounts_status_expiresAt` | `status`, `expiresAt` | `…006000` | **SchedulerService.runExpiryJob()** — `status IN ('pending_payment','pending_claim') AND expiresAt < NOW()` (TypeORM `LessThan`); **PaymentMonitorService.pollAllAccounts()** — `status = 'pending_payment' AND expiresAt > NOW()` (TypeORM `MoreThan`). |
+| `IDX_accounts_status_createdAt` | `status`, `createdAt` | `…006000` | **SchedulerService.runInitializingCleanup()** — `status = 'initializing' AND createdAt < <cutoff>` (TypeORM `LessThan`).                                                                                                                                 |
+| `IDX_accounts_createdAt`        | `createdAt`           | `…006000` | No production caller today: audit / time-boxed reporting range scans. Least load-bearing of the high-traffic set.                                                                                                                                        |
+| `IDX_accounts_deletedAt`        | `deletedAt`           | `…008000` | Soft-delete predicate (`deletedAt IS NULL`) that TypeORM appends to every `find()` / `findOne()`, including `AccountsService.findOne()`.                                                                                                                 |
+
+`…NNNNNN` abbreviates the migration timestamp prefix; the full names are
+`1718100000000-CreateAccountsTable`, `1718100006000-AddHighTrafficIndexes`
+and `1718100008000-AddDeletedAtToAccountsTable`.
+
+The three indexes from `1718100006000-AddHighTrafficIndexes` are the ones most
+likely to be dropped by mistake: `IDX_accounts_status_expiresAt` serves **two**
+pollers in opposite directions (expire-soon rows for the scheduler,
+not-yet-expired rows for the payment monitor), and nothing in the migration
+file itself references either service. `PaymentMonitorService.pollAllAccounts()`'s
+`expiresAt > NOW()` predicate depends on it just as much as the scheduler's
+`< NOW()` does. The same mapping is repeated in that migration's header
+comment, next to the `CREATE INDEX` statements themselves.
 
 ### claims
 
@@ -149,12 +171,50 @@ large rather than after:
 
 ## Migration Verification
 
-`src/database/migrations.integration.spec.ts` provisions a fresh embedded PostgreSQL database, applies every migration, verifies:
+`test/migrations.integration.runner.ts` provisions a fresh embedded PostgreSQL
+database and exercises the whole migration set: `up` in order, `down` back to
+zero, then `up` again. Run it with:
 
-1. The resulting schema matches TypeORM entity metadata (`schemaInSync: true`).
-2. The `claims.accountId` and `webhook_deliveries.subscription_id` foreign keys are enforced (inserts with orphan UUIDs are rejected).
-3. The three high-traffic composite/standalone indexes exist after migration `1718100006000`.
-4. The `contract_events` table exists with the expected columns and accepts inserts after migration `1718100007000`.
+```bash
+npm run test:migrations
+```
+
+It is not part of `npm test` (Jest's `rootDir` is `src/`), so it has to be
+invoked explicitly. It verifies:
+
+1. All twelve migrations apply **in the pinned filename order** — the order is
+   asserted against a fixed list, so a reordering regression fails the run.
+   This matters for the three files sharing the `1718100008000` timestamp
+   (`AddDeletedAtToAccountsTable`, `AddPartialSweepToAccountStatus`,
+   `CreateClaimAuditLogTable`), whose relative order comes from filename
+   comparison rather than from the timestamp itself.
+2. The `claims.accountId` and `webhook_deliveries.subscription_id` foreign keys
+   are enforced (inserts with orphan UUIDs are rejected).
+3. The three high-traffic composite/standalone indexes exist after migration
+   `1718100006000`.
+4. The `contract_events` table exists with the expected columns and accepts
+   inserts after migration `1718100007000`.
+5. Reverting every migration, newest first, returns the schema to its prior
+   state: no application tables left, `account_status_enum` gone, and the
+   `migrations` tracking table empty.
+6. Re-running `up` after that full revert restores the same state: the pinned
+   order repeats, the `account_status_enum` values and high-traffic indexes
+   come back identical, and the entity ↔ schema diff is unchanged. This is
+   what catches a `down()` that is missing or only partially reverses its
+   `up()`.
+
+Note on `schemaInSync` / `schemaUpQueryCount` in the output: these report
+TypeORM's entity ↔ schema diff and are informational, not pass/fail. The diff
+is already non-empty on a clean tree because of pre-existing drift unrelated
+to the migrations in this folder — `accounts.contractId` (column and
+`IDX_accounts_contractId`) exists in the entity but in no migration, and
+`claim_audit_log`'s entity declares unnamed `@Index()` decorators while
+`CreateClaimAuditLogTable` creates explicitly named indexes, so the diff
+proposes renaming them.
+
+`npm run migration:revert` remains the one-step-at-a-time path against a real
+database (it reverts only the most recently applied migration per call); see
+CONTRIBUTING.md → "Verifying `down()`" for when to use which.
 
 ## Foreign Key Cascade Behavior
 
