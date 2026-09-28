@@ -107,7 +107,7 @@ describe('Webhooks lifecycle (e2e) [issue #672]', () => {
           body: Buffer.concat(chunks).toString('utf8'),
           signature: req.headers['x-bridgelet-signature'] as string | undefined,
           event: req.headers['x-bridgelet-event'] as string | undefined,
-          contentType: req.headers['content-type'] as string | undefined,
+          contentType: req.headers['content-type'],
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end('{"ok":true}');
@@ -328,7 +328,7 @@ describe('Webhooks lifecycle (e2e) [issue #672]', () => {
       await settleDeliveries();
 
       expect(received).toHaveLength(1);
-      const delivery = received[0]!;
+      const delivery = received[0];
       expect(delivery.event).toBe(EVENT);
       expect(delivery.contentType).toContain('application/json');
       expect(JSON.parse(delivery.body)).toEqual(

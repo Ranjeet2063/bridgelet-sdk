@@ -40,8 +40,7 @@ jest.mock('@aws-sdk/client-kms', () => {
 
 /** The shared `send` mock backing every mocked KMSClient instance. */
 function kmsSendMock(): jest.Mock {
-  return (jest.requireMock('@aws-sdk/client-kms') as { __send: jest.Mock })
-    .__send;
+  return jest.requireMock('@aws-sdk/client-kms').__send;
 }
 
 /** A ConfigService that reports KMS as enabled with a CMK id. */

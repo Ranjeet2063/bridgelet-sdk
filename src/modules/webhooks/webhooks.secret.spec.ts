@@ -27,19 +27,18 @@ function makeKmsStub(overrides: Partial<KmsKeyProvider> = {}) {
   } as unknown as KmsKeyProvider;
 }
 
-const makeWebhook = (overrides: Partial<Webhook> = {}): Webhook =>
-  ({
-    id: 'wh-1',
-    url: URL,
-    secret: SecretEncryptionUtil.encrypt(PLAINTEXT_SECRET, KEY),
-    events: ['sweep.completed'],
-    isActive: true,
-    description: null,
-    lastTriggeredAt: null,
-    createdAt: new Date('2026-01-01T00:00:00.000Z'),
-    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-    ...overrides,
-  }) as Webhook;
+const makeWebhook = (overrides: Partial<Webhook> = {}): Webhook => ({
+  id: 'wh-1',
+  url: URL,
+  secret: SecretEncryptionUtil.encrypt(PLAINTEXT_SECRET, KEY),
+  events: ['sweep.completed'],
+  isActive: true,
+  description: null,
+  lastTriggeredAt: null,
+  createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+  ...overrides,
+});
 
 describe('WebhooksService — secret handling', () => {
   let service: WebhooksService;
@@ -218,7 +217,7 @@ describe('WebhooksService — secret handling', () => {
 
     it('produces the same signature the docs tell integrators to compute', async () => {
       const { body, headers } = await captureDelivery();
-      const header = headers['X-Bridgelet-Signature']!;
+      const header = headers['X-Bridgelet-Signature'];
       expect(header.startsWith('sha256=')).toBe(true);
       const digest = header.slice('sha256='.length);
       expect(digest).toMatch(/^[0-9a-f]{64}$/);
@@ -264,7 +263,7 @@ describe('WebhooksService — secret handling', () => {
         decrypt: () => {
           throw new Error('bad key');
         },
-      } as Partial<KmsKeyProvider>);
+      });
       qb.getMany.mockResolvedValue([
         makeWebhook({ secret: SecretEncryptionUtil.encrypt('x', KEY) }),
       ]);

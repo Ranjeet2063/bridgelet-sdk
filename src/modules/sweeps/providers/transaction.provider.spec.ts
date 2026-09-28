@@ -89,11 +89,13 @@ const mockTransactionBuilder = jest
     MockTransactionBuilder,
     [MockAccount, { fee: string; networkPassphrase: string }]
   >()
-  .mockImplementation((): MockTransactionBuilder => ({
-    addOperation: mockTransactionAddOperation,
-    setTimeout: mockTransactionSetTimeout,
-    build: mockTransactionBuild,
-  }));
+  .mockImplementation(
+    (): MockTransactionBuilder => ({
+      addOperation: mockTransactionAddOperation,
+      setTimeout: mockTransactionSetTimeout,
+      build: mockTransactionBuild,
+    }),
+  );
 const mockPaymentOperation = jest.fn<
   MockOperation,
   [{ destination: string; asset: MockAsset; amount: string }]
@@ -182,10 +184,12 @@ getMockAsset.native = (): MockAsset =>
 jest.mock('@stellar/stellar-sdk', () => {
   return {
     Horizon: {
-      Server: jest.fn().mockImplementation((): MockTransactionBuilder => ({
-        loadAccount: mockLoadAccount,
-        submitTransaction: mockSubmitTransaction,
-      })),
+      Server: jest.fn().mockImplementation(
+        (): MockTransactionBuilder => ({
+          loadAccount: mockLoadAccount,
+          submitTransaction: mockSubmitTransaction,
+        }),
+      ),
     },
     Keypair: {
       fromSecret: getMockKeypairFromSecret,

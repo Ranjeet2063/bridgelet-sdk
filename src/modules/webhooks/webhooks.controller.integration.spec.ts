@@ -240,8 +240,8 @@ describe('WebhooksController integration (real service + repository)', () => {
 
       const firstPage = await controller.findAll('2', '0');
       expect(firstPage.webhooks.map((w) => w.id)).toEqual([
-        seeded[0]!.id,
-        seeded[1]!.id,
+        seeded[0].id,
+        seeded[1].id,
       ]);
       expect(firstPage.total).toBe(5);
     });

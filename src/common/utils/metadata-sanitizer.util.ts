@@ -106,7 +106,7 @@ function sanitiseValue(
 
   const out: Record<string, MetadataValue> = {};
   let kept = 0;
-  for (const [key, nested] of Object.entries(value as object)) {
+  for (const [key, nested] of Object.entries(value)) {
     if (kept >= METADATA_MAX_KEYS) break;
     if (DANGEROUS_KEYS.has(key)) continue;
     if (key.length > METADATA_MAX_KEY_LENGTH) continue;
