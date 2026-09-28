@@ -40,6 +40,7 @@ The rotation window exists to make that a non-event.
    ```
 
    From this deploy onward:
+
    - new claim tokens are signed with the new secret;
    - verification tries the new secret first, then `JWT_SECRET_PREVIOUS`;
    - a token that verifies under neither secret still fails, with the error

@@ -214,11 +214,13 @@ Network determines:
 ### Security Considerations
 
 1. **Secret Key Handling:**
+
    - Ephemeral secrets are temporary
    - Never log secret keys
    - Clear from memory after use
 
 2. **Authorization Signatures:**
+
    - Real Ed25519 signing is implemented (#457). `SweepSignerUtil.sign()`
      produces a 64-byte signature over
      `SHA256( destination_xdr ‖ nonce_be_u64 ‖ controller_xdr )`, matching
@@ -233,6 +235,7 @@ Network determines:
      configurations — see `SweepSigningGuard` (#457).
 
 3. **Transaction Verification:**
+
    - Always verify transaction success
    - Check ledger confirmation
    - Monitor for failed transactions
@@ -247,6 +250,7 @@ Network determines:
 ### Short Term
 
 1. **On-Chain Authorization Enforcement** (the real remaining gap, #457):
+
    - `authorizeSweep()` builds and simulates the `sweep` call but **never
      submits it**, so no signature reaches the chain and `authorized: true`
      reflects a successful simulation only. Recording this rather than fixing
@@ -258,6 +262,7 @@ Network determines:
      `env.crypto().ed25519_verify`.
 
 2. **Production Key Management:**
+
    - The signing seed is read from the environment; there is no HSM/KMS
      integration
    - `SweepSigningGuard` blocks production deployments from using a dev seed
@@ -271,16 +276,19 @@ Network determines:
 ### Long Term
 
 1. **Batch Sweeps:**
+
    - Sweep multiple accounts in one transaction
    - Reduce transaction fees
    - Improve efficiency
 
 2. **Gas Optimization:**
+
    - Optimize contract calls
    - Reduce transaction sizes
    - Minimize operations
 
 3. **Monitoring & Alerts:**
+
    - Real-time sweep monitoring
    - Alert on failures
    - Track success rates

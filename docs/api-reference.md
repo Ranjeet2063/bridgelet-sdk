@@ -140,7 +140,9 @@ Admin listing with pagination.
 
 ```json
 {
-  "accounts": [/* AccountResponseDto[] */],
+  "accounts": [
+    /* AccountResponseDto[] */
+  ],
   "total": 150
 }
 ```
