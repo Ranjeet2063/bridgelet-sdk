@@ -11,12 +11,13 @@ import { StellarService } from '../stellar/stellar.service.js';
 import { Account } from '../accounts/entities/account.entity.js';
 import { AccountStatus } from '../accounts/enums/account-status.enum.js';
 import { WebhooksService } from '../webhooks/webhooks.service.js';
+import { IntervalJobRunner } from '../../common/utils/interval-job-runner.js';
 
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerService.name);
-  private expiryHandle: ReturnType<typeof setInterval> | null = null;
-  private initializingHandle: ReturnType<typeof setInterval> | null = null;
+  private expiryRunner: IntervalJobRunner | null = null;
+  private initializingRunner: IntervalJobRunner | null = null;
 
   constructor(
     @InjectRepository(Account)
@@ -27,21 +28,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    const expiryIntervalMs = this.configService.getOrThrow<number>(
-      'app.expiryCheckIntervalMs',
+    const expiryIntervalMs = Number(
+      this.configService.getOrThrow<number>('app.expiryCheckIntervalMs'),
     );
-    const initializingIntervalMs = this.configService.getOrThrow<number>(
-      'app.initializingCleanupIntervalMs',
+    const initializingIntervalMs = Number(
+      this.configService.getOrThrow<number>(
+        'app.initializingCleanupIntervalMs',
+      ),
     );
 
-    this.expiryHandle = setInterval(
-      () => void this.runExpiryJob(),
+    this.expiryRunner = this.createRunner(
       expiryIntervalMs,
+      () => this.runExpiryJob(),
+      'Expiry job',
     );
-    this.initializingHandle = setInterval(
-      () => void this.runInitializingCleanup(),
+    this.initializingRunner = this.createRunner(
       initializingIntervalMs,
+      () => this.runInitializingCleanup(),
+      'INITIALIZING cleanup',
     );
+    this.expiryRunner.start();
+    this.initializingRunner.start();
 
     this.logger.log(`Expiry job started (interval: ${expiryIntervalMs}ms)`);
     this.logger.log(
@@ -50,15 +57,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleDestroy(): void {
-    if (this.expiryHandle !== null) {
-      clearInterval(this.expiryHandle);
-      this.expiryHandle = null;
-    }
-    if (this.initializingHandle !== null) {
-      clearInterval(this.initializingHandle);
-      this.initializingHandle = null;
-    }
+    this.expiryRunner?.stop();
+    this.initializingRunner?.stop();
+    this.expiryRunner = null;
+    this.initializingRunner = null;
     this.logger.log('Scheduler jobs stopped');
+  }
+
+  private createRunner(
+    intervalMs: number,
+    task: () => Promise<void>,
+    name: string,
+  ): IntervalJobRunner {
+    return new IntervalJobRunner({
+      intervalMs,
+      jitterMs: Math.min(Math.floor(intervalMs * 0.1), 5_000),
+      task,
+      onError: (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`${name} failed: ${message}`);
+      },
+    });
   }
 
   /**
