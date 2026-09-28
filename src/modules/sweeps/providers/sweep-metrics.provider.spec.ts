@@ -16,8 +16,12 @@ describe('SweepMetricsProvider', () => {
   let registry: Registry;
 
   /** Reads a gauge's current value straight out of the registry. */
-  const gaugeValue = (name: string): number =>
-    registry.getSingleMetric(name)!.get() as unknown as number;
+  const gaugeValue = async (name: string): Promise<number> => {
+    const metric = registry.getSingleMetric(name);
+    if (!metric) throw new Error(`Metric ${name} not found`);
+    const metricObject = await metric.get();
+    return metricObject.values[0]?.value;
+  };
 
   beforeEach(async () => {
     registry = new Registry();
@@ -47,8 +51,8 @@ describe('SweepMetricsProvider', () => {
       }
     });
 
-    it('reports a success rate of 1 before anything is recorded', () => {
-      expect(gaugeValue('sweep_success_rate')).toBe(1);
+    it('reports a success rate of 1 before anything is recorded', async () => {
+      expect(await gaugeValue('sweep_success_rate')).toBe(1);
     });
 
     it('reuses an already-registered metric instead of throwing', () => {
@@ -72,17 +76,17 @@ describe('SweepMetricsProvider', () => {
       expect(provider.getCompletedTotal()).toBe(2);
     });
 
-    it('is reflected in the Prometheus gauge', () => {
+    it('is reflected in the Prometheus gauge', async () => {
       provider.recordCompleted();
       provider.recordCompleted();
       provider.recordCompleted();
-      expect(gaugeValue('sweep_completed_total')).toBe(3);
+      expect(await gaugeValue('sweep_completed_total')).toBe(3);
     });
 
-    it('is independent of recordFailed()', () => {
+    it('is independent of recordFailed()', async () => {
       provider.recordFailed();
       expect(provider.getCompletedTotal()).toBe(0);
-      expect(gaugeValue('sweep_completed_total')).toBe(0);
+      expect(await gaugeValue('sweep_completed_total')).toBe(0);
     });
   });
 
@@ -98,15 +102,15 @@ describe('SweepMetricsProvider', () => {
       expect(provider.getFailedTotal()).toBe(3);
     });
 
-    it('is reflected in the Prometheus gauge', () => {
+    it('is reflected in the Prometheus gauge', async () => {
       provider.recordFailed();
-      expect(gaugeValue('sweep_failed_total')).toBe(1);
+      expect(await gaugeValue('sweep_failed_total')).toBe(1);
     });
 
-    it('is independent of recordCompleted()', () => {
+    it('is independent of recordCompleted()', async () => {
       provider.recordCompleted();
       expect(provider.getFailedTotal()).toBe(0);
-      expect(gaugeValue('sweep_failed_total')).toBe(0);
+      expect(await gaugeValue('sweep_failed_total')).toBe(0);
     });
   });
 
@@ -148,7 +152,7 @@ describe('SweepMetricsProvider', () => {
       { completed: 19, failed: 1 },
     ])(
       'completed=$completed failed=$failed is consistent across both views',
-      ({ completed, failed }) => {
+      async ({ completed, failed }) => {
         for (let i = 0; i < completed; i++) provider.recordCompleted();
         for (let i = 0; i < failed; i++) provider.recordFailed();
 
@@ -159,9 +163,9 @@ describe('SweepMetricsProvider', () => {
           sweep_success_rate: provider.getSuccessRate(),
         });
 
-        expect(gaugeValue('sweep_completed_total')).toBe(completed);
-        expect(gaugeValue('sweep_failed_total')).toBe(failed);
-        expect(gaugeValue('sweep_success_rate')).toBeCloseTo(
+        expect(await gaugeValue('sweep_completed_total')).toBe(completed);
+        expect(await gaugeValue('sweep_failed_total')).toBe(failed);
+        expect(await gaugeValue('sweep_success_rate')).toBeCloseTo(
           snapshot.sweep_success_rate,
         );
       },

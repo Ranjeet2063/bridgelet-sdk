@@ -47,6 +47,7 @@ export class SweepMetricsProvider {
     this.successRateGauge = this.getOrCreateGauge('sweep_success_rate', {
       help: 'Ratio of completed to total sweeps (1 when none recorded)',
     });
+    this.syncGauges();
   }
 
   /**
