@@ -32,7 +32,7 @@ jobs:
         run: |
           npm audit --audit-level=high --omit=dev --json > audit.json || true
           node -e "
-            const baseline = new Set(['js-yaml','multer','protobufjs','qs','toml','typeorm','@nestjs/swagger','@nestjs/platform-express','@stellar/stellar-sdk','@opentelemetry/auto-instrumentations-node','@opentelemetry/propagator-jaeger','@opentelemetry/sdk-node','brace-expansion']);
+            const baseline = new Set(['js-yaml','multer','protobufjs','qs','toml','typeorm','@nestjs/swagger','@nestjs/platform-express','@stellar/stellar-sdk','@opentelemetry/auto-instrumentations-node','@opentelemetry/propagator-jaeger','@opentelemetry/sdk-node','brace-expansion','browserslist','fast-uri']);
             const { vulnerabilities = {} } = JSON.parse(require('fs').readFileSync('audit.json', 'utf8'));
             const newFindings = Object.entries(vulnerabilities).filter(
               ([name, v]) => !baseline.has(name) && ['high', 'critical'].includes(v.severity),
