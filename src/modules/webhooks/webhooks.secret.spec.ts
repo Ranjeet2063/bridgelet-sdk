@@ -264,15 +264,16 @@ describe('WebhooksService — secret handling', () => {
           throw new Error('bad key');
         },
       });
-      qb.getMany.mockResolvedValue([
-        makeWebhook({ secret: SecretEncryptionUtil.encrypt('x', KEY) }),
-      ]);
+      const testWebhook = makeWebhook({ secret: SecretEncryptionUtil.encrypt('x', KEY) });
       await build(brokenKms);
+      qb.getMany.mockResolvedValue([testWebhook]);
 
+      const errorSpy = jest.spyOn(Logger.prototype, 'error');
+      
       await service.triggerEvent('sweep.completed', { accountId: 'a1' });
 
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(Logger.prototype.error).toHaveBeenCalledWith(
+      expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining('could not be decrypted'),
       );
     });

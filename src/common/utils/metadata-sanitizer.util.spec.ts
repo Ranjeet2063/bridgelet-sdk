@@ -202,7 +202,8 @@ describe('sanitizeMetadata', () => {
 
   it('drops an array nested beyond METADATA_MAX_DEPTH', () => {
     const result = sanitizeMetadata({ a: { b: { c: ['too deep'] } } })!;
-    expect(result).toEqual({ a: { b: { c: {} } } });
+    // Array at depth 4 becomes empty array (preserves key, drops children).
+    expect(result).toEqual({ a: { b: { c: [] } } });
   });
 
   it('applies the same depth budget inside arrays', () => {
@@ -210,7 +211,8 @@ describe('sanitizeMetadata', () => {
     const result = sanitizeMetadata({
       list: [{ keep: 1 }, { drop: { x: 1 } }],
     })!;
-    expect(result).toEqual({ list: [{ keep: 1 }, {}] });
+    // Object at depth 3 keeps its key 'drop' with empty object value.
+    expect(result).toEqual({ list: [{ keep: 1 }, { drop: {} }] });
   });
 
   // ── rule 6: value types ─────────────────────────────────────────────────────

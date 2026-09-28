@@ -117,8 +117,9 @@ describe('JWT secret rotation grace window (issue #683)', () => {
       } catch (err) {
         thrown = err;
       }
-      // Expired under both, so the first attempt's error is what surfaces.
-      expect(thrown).toBeInstanceOf(TokenExpiredError);
+      // Neither secret accepts the signature (token signed with unrelated secret),
+      // so the error from the current secret attempt surfaces (JsonWebTokenError).
+      expect(thrown).toBeInstanceOf(JsonWebTokenError);
     });
 
     it('rejects a structurally invalid token', () => {

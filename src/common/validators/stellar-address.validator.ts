@@ -61,11 +61,15 @@ export class StellarAddressValidator {
       if (options.allowContractAddress && StrKey.isValidContract(address)) {
         return true;
       }
-      if (
-        options.allowMuxedAccount &&
-        StrKey.isValidMed25519PublicKey(address)
-      ) {
-        return true;
+      if (options.allowMuxedAccount) {
+        // isValidMed25519PublicKey has a bug in stellar-sdk 14.6.1 (returns false
+        // for valid muxed accounts). Use decode + try/catch as a workaround.
+        try {
+          StrKey.decodeMed25519PublicKey(address);
+          return true;
+        } catch {
+          return false;
+        }
       }
       return false;
     } catch {

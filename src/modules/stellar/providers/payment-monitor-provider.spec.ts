@@ -441,9 +441,10 @@ describe('PaymentMonitorProvider', () => {
           amount: 1_000_000_000n,
         }),
       );
-      expect(accountsRepo.update).toHaveBeenCalledWith('acc-uuid-1', {
-        status: AccountStatus.PENDING_CLAIM,
-      });
+      expect(accountsRepo.update).toHaveBeenCalledWith(
+        { id: 'acc-uuid-1', status: AccountStatus.PENDING_PAYMENT },
+        { status: AccountStatus.PENDING_CLAIM },
+      );
       expect(mockCloseStream).toHaveBeenCalledTimes(1);
     });
   });

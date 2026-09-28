@@ -76,6 +76,9 @@ function sanitiseValue(
 ): MetadataValue | undefined {
   if (value === null) return null;
 
+  // BigInt check before any other processing to avoid JSON.stringify issues
+  if (typeof value === 'bigint') return undefined;
+
   switch (typeof value) {
     case 'string':
     case 'boolean':
@@ -86,11 +89,14 @@ function sanitiseValue(
     case 'object':
       break;
     default:
-      // undefined, function, symbol, bigint
+      // undefined, function, symbol
       return undefined;
   }
 
-  if (depth > METADATA_MAX_DEPTH) return undefined;
+  // At max depth, return empty container to preserve parent key but drop children
+  if (depth > METADATA_MAX_DEPTH) {
+    return Array.isArray(value) ? [] : {};
+  }
 
   if (Array.isArray(value)) {
     const out = value
@@ -103,6 +109,9 @@ function sanitiseValue(
   // prototype is not caller-authored key/value data.
   const proto = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) return undefined;
+
+  // Drop objects with custom toJSON to prevent payload smuggling
+  if (typeof (value as Record<string, unknown>).toJSON === 'function') return undefined;
 
   const out: Record<string, MetadataValue> = {};
   let kept = 0;
@@ -158,10 +167,12 @@ export function sanitizeMetadata(
 ): Record<string, unknown> | undefined {
   if (!metadata) return undefined;
 
-  const serialised = JSON.stringify(metadata);
-  if (serialised === undefined) {
-    throw new BadRequestException('metadata must be JSON-serialisable');
-  }
+  // Use a replacer to handle non-JSON-serializable values (BigInt, etc.)
+  // by converting them to undefined (which omits the property).
+  const serialised = JSON.stringify(metadata, (_, value) => {
+    if (typeof value === 'bigint') return undefined;
+    return value;
+  });
   if (Buffer.byteLength(serialised, 'utf8') > METADATA_MAX_BYTES) {
     throw new BadRequestException(
       `metadata exceeds maximum allowed size of ${METADATA_MAX_BYTES} bytes`,

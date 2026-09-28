@@ -128,8 +128,12 @@ describe('AccountsService', () => {
     };
 
     function setupCreateSuccess() {
-      const initializingAccount = makeAccount({ status: AccountStatus.INITIALIZING });
-      const savedAccount = makeAccount({ status: AccountStatus.PENDING_PAYMENT });
+      const initializingAccount = makeAccount({
+        status: AccountStatus.INITIALIZING,
+      });
+      const savedAccount = makeAccount({
+        status: AccountStatus.PENDING_PAYMENT,
+      });
       mockRepo.create.mockReturnValue(initializingAccount);
       mockRepo.save
         .mockResolvedValueOnce(initializingAccount) // first save with INITIALIZING

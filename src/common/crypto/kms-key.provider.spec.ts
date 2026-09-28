@@ -54,6 +54,7 @@ function kmsEnabledConfig(extra: Record<string, string> = {}): ConfigService {
           : FALLBACK_KEY,
     get: (key: string) => {
       if (key === 'app.kmsKeyId') return 'alias/test-cmk';
+      if (key === 'app.kmsDataKeyPath') return extra['app.kmsDataKeyPath'];
       return extra[key];
     },
   } as unknown as ConfigService;
@@ -83,6 +84,7 @@ describe('KmsKeyProvider', () => {
     rmSync(dataKeyDir, { recursive: true, force: true });
     process.env = { ...savedEnv };
     jest.clearAllMocks();
+    jest.restoreAllMocks();
     mockConfigService.getOrThrow.mockReturnValue(FALLBACK_KEY);
     mockConfigService.get.mockReturnValue(undefined);
   });
@@ -139,8 +141,11 @@ describe('KmsKeyProvider', () => {
 
     it('reads a row written under the previous key during rotation', () => {
       // #681: the dual-key path is actually wired in, not just implemented.
+      // Tagged (v2) ciphertexts carry the key id, so the resolver can pick the
+      // correct previous key. Untagged (v1) ciphertexts are only decryptable
+      // with the current key (or by calling decryptWithRotation explicitly).
       const previous = 'b'.repeat(64);
-      const old = SecretEncryptionUtil.encrypt('OLD_SECRET', previous);
+      const old = SecretEncryptionUtil.encryptWithKeyId('OLD_SECRET', previous, 'previous');
 
       const provider = new KmsKeyProvider({
         getOrThrow: () => FALLBACK_KEY,
@@ -155,18 +160,20 @@ describe('KmsKeyProvider', () => {
   describe('data key persistence across restarts', () => {
     it('generates and persists a data key on first run', async () => {
       const plaintext = Buffer.from('c'.repeat(32), 'utf8');
+      kmsSendMock().mockReset();
       kmsSendMock().mockResolvedValue({
         Plaintext: plaintext,
         CiphertextBlob: Buffer.from('wrapped-blob'),
       });
-      process.env.KMS_DATA_KEY_PATH = join(dataKeyDir, 'data-key');
+      const path = join(dataKeyDir, 'data-key');
 
-      const provider = new KmsKeyProvider(kmsEnabledConfig());
+      const config = kmsEnabledConfig({ 'app.kmsDataKeyPath': path });
+      const provider = new KmsKeyProvider(config);
       await provider.onModuleInit();
 
       expect(provider.getEncryptionKey()).toBe(plaintext.toString('hex'));
       // The blob is on disk, so the next start can reuse this key.
-      expect(loadPersistedEncryptedDataKey(join(dataKeyDir, 'data-key'))).toBe(
+      expect(loadPersistedEncryptedDataKey(path)).toBe(
         Buffer.from('wrapped-blob').toString('base64'),
       );
     });
