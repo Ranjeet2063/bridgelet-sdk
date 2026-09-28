@@ -20,23 +20,33 @@ describe('AccountLatencyMetricsProvider', () => {
   interface HistogramReading {
     count: number;
     sum: number;
-    buckets: ReadonlyArray<{ le: string | number; count: number }>;
+    values: ReadonlyArray<{
+      metricName: string;
+      value: number;
+      labels: { le?: string | number };
+    }>;
   }
 
-  const histogram = (): HistogramReading =>
-    registry.getSingleMetric(HISTOGRAM)!.get() as unknown as HistogramReading;
+  const getHistogram = async (): Promise<HistogramReading> => {
+    const metric = registry.getSingleMetric(HISTOGRAM);
+    if (!metric) throw new Error('Histogram not registered');
+    return metric.get();
+  };
 
   /** Cumulative count of samples at or below the given bucket bound. */
-  const bucketCount = (le: string | number): number => {
-    const match = histogram().buckets.find((b) => b.le === le);
+  const bucketCount = async (le: string | number): Promise<number> => {
+    const { values } = await getHistogram();
+    const match = values.find(
+      (b) => b.metricName === HISTOGRAM + '_bucket' && b.labels.le === le,
+    );
     if (!match) {
-      throw new Error(
-        `No Prometheus bucket with le=${le}; got ${histogram()
-          .buckets.map((b) => b.le)
-          .join(', ')}`,
-      );
+      const available = (await getHistogram()).values
+        .filter((b) => b.metricName === HISTOGRAM + '_bucket')
+        .map((b) => b.labels.le)
+        .join(', ');
+      throw new Error(`No Prometheus bucket with le=${le}; got ${available}`);
     }
-    return match.count;
+    return match.value;
   };
 
   beforeEach(async () => {
@@ -63,10 +73,13 @@ describe('AccountLatencyMetricsProvider', () => {
       expect(registry.getSingleMetric(HISTOGRAM)).toBeDefined();
     });
 
-    it('exposes exactly the documented bucket boundaries', () => {
+    it('exposes exactly the documented bucket boundaries', async () => {
       // A misconfigured boundary here would silently corrupt every percentile
       // and alert derived from the scraped series.
-      const bounds = histogram().buckets.map((b) => b.le);
+      const { values } = await getHistogram();
+      const bounds = values
+        .filter((b) => b.metricName === HISTOGRAM + '_bucket')
+        .map((b) => b.labels.le);
       expect(bounds).toEqual([
         50,
         100,
@@ -80,11 +93,15 @@ describe('AccountLatencyMetricsProvider', () => {
       ]);
     });
 
-    it('keeps the Prometheus buckets in sync with getBuckets()', () => {
+    it('keeps the Prometheus buckets in sync with getBuckets()', async () => {
       const inMemory = provider.getBuckets().map((b) => b.upperBoundMs);
-      const prometheus = histogram()
-        .buckets.filter((b) => b.le !== '+Inf')
-        .map((b) => b.le as number);
+      const { values } = await getHistogram();
+      const prometheus = values
+        .filter(
+          (b) =>
+            b.metricName === HISTOGRAM + '_bucket' && b.labels.le !== '+Inf',
+        )
+        .map((b) => b.labels.le as number);
       expect(prometheus).toEqual(inMemory);
     });
 
@@ -119,12 +136,18 @@ describe('AccountLatencyMetricsProvider', () => {
       expect(b500.count).toBe(2); // cumulative
     });
 
-    it('records every observation on the Prometheus histogram', () => {
+    it('records every observation on the Prometheus histogram', async () => {
       provider.record(120, true);
       provider.record(340, false);
-      const h = histogram();
-      expect(h.count).toBe(2);
-      expect(h.sum).toBe(460);
+      const { values } = await getHistogram();
+      const countVal = values.find(
+        (v) => v.metricName === HISTOGRAM + '_count',
+      )?.value;
+      const sumVal = values.find(
+        (v) => v.metricName === HISTOGRAM + '_sum',
+      )?.value;
+      expect(countVal).toBe(2);
+      expect(sumVal).toBe(460);
     });
   });
 
@@ -144,32 +167,43 @@ describe('AccountLatencyMetricsProvider', () => {
       [9_999],
       [10_000],
       [60_000],
-    ])('a single %ims sample lands in the right Prometheus bucket', (ms) => {
-      provider.record(ms, true);
+    ])(
+      'a single %ims sample lands in the right Prometheus bucket',
+      async (ms) => {
+        provider.record(ms, true);
 
-      const inMemoryCount = provider
-        .getBuckets()
-        .filter((b) => ms <= b.upperBoundMs).length;
-      const prometheusCount = histogram().buckets.filter(
-        (b) => b.le !== '+Inf' && ms <= (b.le as number),
-      ).length;
+        const inMemoryCount = provider
+          .getBuckets()
+          .filter((b) => ms <= b.upperBoundMs).length;
+        const { values } = await getHistogram();
+        const prometheusCount = values.filter(
+          (b) =>
+            b.metricName === HISTOGRAM + '_bucket' &&
+            b.labels.le !== '+Inf' &&
+            ms <= (b.labels.le as number),
+        ).length;
 
-      expect(prometheusCount).toBe(inMemoryCount);
-      // The sample is counted by every bucket at or above its magnitude.
-      expect(bucketCount('+Inf')).toBe(1);
-    });
+        expect(prometheusCount).toBe(inMemoryCount);
+        // The sample is counted by every bucket at or above its magnitude.
+        expect(await bucketCount('+Inf')).toBe(1);
+      },
+    );
 
-    it('keeps counts cumulative across mixed magnitudes', () => {
+    it('keeps counts cumulative across mixed magnitudes', async () => {
       provider.record(40, true);
       provider.record(600, true);
       provider.record(3_000, true);
 
-      expect(bucketCount(50)).toBe(1);
-      expect(bucketCount(500)).toBe(1);
-      expect(bucketCount(1_000)).toBe(2);
-      expect(bucketCount(2_500)).toBe(2);
-      expect(bucketCount(5_000)).toBe(3);
-      expect(histogram().count).toBe(3);
+      expect(await bucketCount(50)).toBe(1);
+      expect(await bucketCount(500)).toBe(1);
+      expect(await bucketCount(1_000)).toBe(2);
+      expect(await bucketCount(2_500)).toBe(2);
+      expect(await bucketCount(5_000)).toBe(3);
+      const { values } = await getHistogram();
+      const countVal = values.find(
+        (v) => v.metricName === HISTOGRAM + '_count',
+      )?.value;
+      expect(countVal).toBe(3);
     });
 
     it('renders the histogram in the Prometheus text exposition format', async () => {

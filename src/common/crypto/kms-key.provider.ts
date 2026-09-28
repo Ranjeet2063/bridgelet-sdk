@@ -119,7 +119,8 @@ export class KmsKeyProvider implements OnModuleInit {
    * persisting a new one on first run.
    */
   private async loadDataKey(): Promise<void> {
-    const persisted = loadPersistedEncryptedDataKey();
+    const dataKeyPath = this.configService.get<string>('app.kmsDataKeyPath');
+    const persisted = loadPersistedEncryptedDataKey(dataKeyPath);
     if (persisted) {
       try {
         this.plaintextKey = await this.decryptDataKey(
@@ -160,9 +161,12 @@ export class KmsKeyProvider implements OnModuleInit {
       this.plaintextKey = Buffer.from(response.Plaintext).toString('hex');
 
       if (response.CiphertextBlob) {
+        const dataKeyPath =
+          this.configService.get<string>('app.kmsDataKeyPath');
         try {
           persistEncryptedDataKey(
             Buffer.from(response.CiphertextBlob).toString('base64'),
+            dataKeyPath,
           );
           this.logger.log(
             'KMS data key generated and persisted for reuse across restarts',

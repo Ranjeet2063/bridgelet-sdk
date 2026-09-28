@@ -1,5 +1,5 @@
 import type { JwtService } from '@nestjs/jwt';
-import jwt from 'jsonwebtoken';
+import jwt, { TokenExpiredError } from 'jsonwebtoken';
 
 /**
  * Grace-window secret rotation for `JWT_SECRET` (issue #683).
@@ -60,10 +60,17 @@ export function verifyClaimTokenWithRotation<T = unknown>(
     }
     try {
       return jwt.verify(token, previousSecret) as T;
-    } catch {
-      // Neither secret accepted it. Surface the failure against the *current*
-      // secret: that is the one the client should be fixing, and it preserves
-      // the TokenExpiredError vs JsonWebTokenError distinction callers rely on.
+    } catch (previousErr) {
+      // Neither secret accepted it. Prefer TokenExpiredError over
+      // JsonWebTokenError when the previous secret accepted the signature
+      // but the token is expired — that's the real reason the token is
+      // invalid and callers need to map it to 401 correctly.
+      if (previousErr instanceof TokenExpiredError) {
+        throw previousErr;
+      }
+      // For all other cases (signature mismatch, malformed token, etc.),
+      // surface the failure against the *current* secret so callers see the
+      // error that matches what the client should be fixing.
       throw currentErr;
     }
   }

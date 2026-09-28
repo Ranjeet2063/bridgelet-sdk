@@ -8,6 +8,7 @@ import { StellarService } from '../stellar/stellar.service.js';
 import { ConfigService } from '@nestjs/config';
 import { getToken } from '@willsoto/nestjs-prometheus';
 import { SweepMetricsProvider } from './providers/sweep-metrics.provider.js';
+import { Registry, register } from 'prom-client';
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -108,6 +109,10 @@ describe('SweepsService', () => {
         {
           provide: getToken('sweep_failure_total'),
           useValue: { inc: jest.fn() },
+        },
+        {
+          provide: Registry,
+          useValue: register,
         },
       ],
     }).compile();

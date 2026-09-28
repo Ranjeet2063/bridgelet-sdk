@@ -106,9 +106,9 @@ describe('key-id tagged ciphertext (issue #681)', () => {
 
   describe('untagged rows keep working', () => {
     it('decrypts a v1 row through the same ring API', () => {
-      const ct = SecretEncryptionUtil.encrypt(PLAINTEXT, KEY_A);
       const ring = { currentKeyId: 'k2', currentKey: KEY_B };
-      // v1 rows are not tagged, so the current key is the only candidate.
+      // v1 rows are not tagged, so the current key must match the key used to encrypt.
+      const ct = SecretEncryptionUtil.encrypt(PLAINTEXT, KEY_B);
       expect(SecretRotationUtil.decrypt(ct, ring)).toBe(PLAINTEXT);
     });
 
