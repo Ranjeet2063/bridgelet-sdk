@@ -30,7 +30,8 @@
     "audit:secrets": "ts-node --esm src/scripts/audit-legacy-secret-formats.ts",
     "check:embedded-postgres-types": "node scripts/check-embedded-postgres-types.cjs",
     "test:migrations": "node --loader ts-node/esm test/migrations.integration.runner.ts",
-    "check:stellar-sdk-pin": "node scripts/check-stellar-sdk-pin.cjs"
+    "check:stellar-sdk-pin": "node scripts/check-stellar-sdk-pin.cjs",
+    "test:mutation": "stryker run"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "3.1075.0",

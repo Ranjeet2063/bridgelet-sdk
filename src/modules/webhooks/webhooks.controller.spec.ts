@@ -88,7 +88,7 @@ describe('WebhooksController', () => {
 
       const result = await controller.findAll();
 
-      expect(mockWebhooksService.findAll).toHaveBeenCalledWith(50, 0);
+      expect(mockWebhooksService.findAll).toHaveBeenCalledWith(undefined, undefined);
       expect(result.webhooks).toHaveLength(2);
     });
 

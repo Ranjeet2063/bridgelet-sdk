@@ -12,6 +12,7 @@ import { AccountStatus } from './enums/account-status.enum.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
 import { AccountLatencyMetricsProvider } from './providers/account-latency-metrics.provider.js';
 import { KmsKeyProvider } from '../../common/crypto/kms-key.provider.js';
+import { Registry, register } from 'prom-client';
 
 const VALID_KEY = 'G' + 'A'.repeat(55);
 const VALID_KEY2 = 'G' + 'B'.repeat(55);
@@ -106,6 +107,10 @@ describe('AccountsService', () => {
             getEncryptionKey: jest.fn().mockReturnValue('a'.repeat(64)),
           },
         },
+        {
+          provide: Registry,
+          useValue: register,
+        },
       ],
     }).compile();
 
@@ -122,11 +127,19 @@ describe('AccountsService', () => {
       expiresIn: 3600,
     };
 
-    it('returns an AccountResponseDto with publicKey and txHash on success', async () => {
-      const saved = makeAccount();
-      mockRepo.create.mockReturnValue(saved);
-      mockRepo.save.mockResolvedValue(saved);
+    function setupCreateSuccess() {
+      const initializingAccount = makeAccount({ status: AccountStatus.INITIALIZING });
+      const savedAccount = makeAccount({ status: AccountStatus.PENDING_PAYMENT });
+      mockRepo.create.mockReturnValue(initializingAccount);
+      mockRepo.save
+        .mockResolvedValueOnce(initializingAccount) // first save with INITIALIZING
+        .mockResolvedValueOnce(savedAccount); // second save with PENDING_PAYMENT
       mockStellarService.createEphemeralAccount.mockResolvedValue('txhash-abc');
+      return savedAccount;
+    }
+
+    it('returns an AccountResponseDto with publicKey and txHash on success', async () => {
+      setupCreateSuccess();
 
       const result = await service.create(dto);
 
@@ -136,10 +149,7 @@ describe('AccountsService', () => {
     });
 
     it('passes expiresIn to createEphemeralAccount for ledger conversion', async () => {
-      const saved = makeAccount();
-      mockRepo.create.mockReturnValue(saved);
-      mockRepo.save.mockResolvedValue(saved);
-      mockStellarService.createEphemeralAccount.mockResolvedValue('txhash-abc');
+      setupCreateSuccess();
 
       await service.create(dto);
 
@@ -149,10 +159,7 @@ describe('AccountsService', () => {
     });
 
     it('triggers account.created webhook after success', async () => {
-      const saved = makeAccount();
-      mockRepo.create.mockReturnValue(saved);
-      mockRepo.save.mockResolvedValue(saved);
-      mockStellarService.createEphemeralAccount.mockResolvedValue('txhash-abc');
+      setupCreateSuccess();
 
       await service.create(dto);
 
@@ -163,10 +170,7 @@ describe('AccountsService', () => {
     });
 
     it('includes a claimUrl in the response', async () => {
-      const saved = makeAccount();
-      mockRepo.create.mockReturnValue(saved);
-      mockRepo.save.mockResolvedValue(saved);
-      mockStellarService.createEphemeralAccount.mockResolvedValue('txhash-abc');
+      setupCreateSuccess();
 
       const result = await service.create(dto);
 
