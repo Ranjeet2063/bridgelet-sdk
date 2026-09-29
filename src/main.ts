@@ -10,7 +10,7 @@ async function bootstrap() {
   const appCfg = appConfig();
   const isProduction = appCfg.env === 'production';
   const logger = isProduction ? new PinoLoggerService() : undefined;
-  const app = await NestFactory.create(AppModule, { logger });
+  const app = await NestFactory.create(AppModule, {  abortOnError: false });
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -43,6 +43,6 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => {
-  console.error('BOOTSTRAP FAILED:', err?.message, err?.stack);
+  console.error('BOOTSTRAP FAILED:', err?.stack ?? err);
   process.exit(1);
 });
