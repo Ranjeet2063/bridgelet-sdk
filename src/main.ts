@@ -42,4 +42,7 @@ async function bootstrap() {
   bootstrapLogger.log(`API Documentation: http://localhost:${port}/api/docs`);
 }
 
-bootstrap().catch(console.error);
+bootstrap().catch((err) => {
+  console.error('BOOTSTRAP FAILED:', err?.message, err?.stack);
+  process.exit(1);
+});

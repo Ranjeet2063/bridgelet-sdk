@@ -20,6 +20,7 @@ import { ClaimsModule } from './modules/claims/claims.module.js';
 import { WebhooksModule } from './modules/webhooks/webhooks.module.js';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware.js';
 import { CryptoModule } from './common/crypto/crypto.module.js';
+import { PromRegistryModule } from './common/metrics/prom-registry.module.js';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { CryptoModule } from './common/crypto/crypto.module.js';
     HealthModule,
     SchedulerModule,
     CryptoModule,
+    PromRegistryModule
   ],
   controllers: [AppController],
   providers: [AppService],
