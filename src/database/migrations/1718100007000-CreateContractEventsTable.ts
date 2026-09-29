@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateContractEventsTable1718100007000
-  implements MigrationInterface
-{
+export class CreateContractEventsTable1718100007000 implements MigrationInterface {
   name = 'CreateContractEventsTable1718100007000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

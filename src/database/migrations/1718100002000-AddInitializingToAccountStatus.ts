@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddInitializingToAccountStatus1718100002000
-  implements MigrationInterface
-{
+export class AddInitializingToAccountStatus1718100002000 implements MigrationInterface {
   name = 'AddInitializingToAccountStatus1718100002000';
 
   // ALTER TYPE ADD VALUE cannot run inside a transaction on some PostgreSQL

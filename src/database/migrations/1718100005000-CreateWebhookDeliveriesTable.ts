@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateWebhookDeliveriesTable1718100005000
-  implements MigrationInterface
-{
+export class CreateWebhookDeliveriesTable1718100005000 implements MigrationInterface {
   name = 'CreateWebhookDeliveriesTable1718100005000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

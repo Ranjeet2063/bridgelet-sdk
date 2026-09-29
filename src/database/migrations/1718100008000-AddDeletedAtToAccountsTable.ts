@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddDeletedAtToAccountsTable1718100008000
-  implements MigrationInterface
-{
+export class AddDeletedAtToAccountsTable1718100008000 implements MigrationInterface {
   name = 'AddDeletedAtToAccountsTable1718100008000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

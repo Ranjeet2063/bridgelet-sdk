@@ -49,7 +49,7 @@ import { PromRegistryModule } from './common/metrics/prom-registry.module.js';
     HealthModule,
     SchedulerModule,
     CryptoModule,
-    PromRegistryModule
+    PromRegistryModule,
   ],
   controllers: [AppController],
   providers: [AppService],

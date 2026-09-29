@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddPartialSweepToAccountStatus1718100008000
-  implements MigrationInterface
-{
+export class AddPartialSweepToAccountStatus1718100008000 implements MigrationInterface {
   name = 'AddPartialSweepToAccountStatus1718100008000';
 
   // ALTER TYPE ADD VALUE cannot run inside a transaction on some PostgreSQL

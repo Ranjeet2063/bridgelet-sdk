@@ -53,9 +53,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * All indexes use the default B-tree access method, which supports equality,
  * range (<, >), and ORDER BY optimisation.
  */
-export class AddContractEventIndexes1718100009000
-  implements MigrationInterface
-{
+export class AddContractEventIndexes1718100009000 implements MigrationInterface {
   name = 'AddContractEventIndexes1718100009000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
