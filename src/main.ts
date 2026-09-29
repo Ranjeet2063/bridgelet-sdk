@@ -10,7 +10,7 @@ async function bootstrap() {
   const appCfg = appConfig();
   const isProduction = appCfg.env === 'production';
   const logger = isProduction ? new PinoLoggerService() : undefined;
-  const app = await NestFactory.create(AppModule, {  abortOnError: false });
+  const app = await NestFactory.create(AppModule, { abortOnError: false });
 
   app.useGlobalPipes(
     new ValidationPipe({
