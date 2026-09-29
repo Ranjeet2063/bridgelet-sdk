@@ -1,5 +1,6 @@
 import type { JwtService } from '@nestjs/jwt';
-import jwt, { TokenExpiredError } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
+const { TokenExpiredError } = jwt;
 
 /**
  * Grace-window secret rotation for `JWT_SECRET` (issue #683).
