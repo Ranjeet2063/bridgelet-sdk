@@ -60,7 +60,15 @@ export class ContractProvider {
         'stellar.contracts.ephemeralAccountVersion',
       ) ?? UNKNOWN_CONTRACT_VERSION;
 
+    // #729: stellar.config.ts rejects anything but 'mainnet' | 'testnet' at
+    // load time. Re-check here so a mis-mocked or bypassed config can't
+    // silently fall through to the testnet passphrase.
     const network = this.configService.getOrThrow<string>('stellar.network');
+    if (network !== 'mainnet' && network !== 'testnet') {
+      throw new Error(
+        `Invalid stellar.network "${network}". Expected "mainnet" or "testnet".`,
+      );
+    }
     this.networkPassphrase =
       network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
 

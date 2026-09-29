@@ -200,6 +200,18 @@ To check coverage for a specific file:
 npm test -- sweeps.service.spec.ts --coverage
 ```
 
+### Load testing and connection pool sizing
+
+Each app instance opens at most **10** PostgreSQL connections (`POOL_CONFIG.max` in `src/config/database.config.ts`), and a caller that cannot get a connection within **3s** (`connectionTimeoutMillis`) fails fast rather than hanging.
+
+When load testing (e.g. 50 concurrent `POST /accounts` requests against one instance), requests beyond the 10 in-flight queries queue in the pool. That is expected: each request holds a connection only briefly, so the queue drains well within the 3s timeout at this concurrency. If you see `timeout exceeded when trying to connect` under load, raise `max` or scale out instances. Don't set `max` so high that the total stops fitting on the server:
+
+```
+instances × POOL_CONFIG.max  +  migration/CLI pools  +  other services  <  Postgres max_connections (default 100)
+```
+
+See `docs/deployment.md` for multi-instance sizing guidance.
+
 ## Environment Variables
 
 ```env

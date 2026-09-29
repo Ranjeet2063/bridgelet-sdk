@@ -117,3 +117,30 @@ describe('stellar.config', () => {
     expect(config.sorobanRpcUrl).toBe('https://soroban.stellar.org');
   });
 });
+
+describe('isSynchronizeAllowed (#726)', () => {
+  it('is false when DATABASE_SYNC is unset or "false"', async () => {
+    const { isSynchronizeAllowed } = await import('./database-sync.util.js');
+    expect(isSynchronizeAllowed({})).toBe(false);
+    expect(isSynchronizeAllowed({ DATABASE_SYNC: 'false' })).toBe(false);
+    expect(
+      isSynchronizeAllowed({ DATABASE_SYNC: 'false', NODE_ENV: 'production' }),
+    ).toBe(false);
+  });
+
+  it('is true only under NODE_ENV=test with DATABASE_SYNC=true', async () => {
+    const { isSynchronizeAllowed } = await import('./database-sync.util.js');
+    expect(
+      isSynchronizeAllowed({ DATABASE_SYNC: 'true', NODE_ENV: 'test' }),
+    ).toBe(true);
+  });
+
+  it('throws when DATABASE_SYNC=true outside NODE_ENV=test', async () => {
+    const { isSynchronizeAllowed } = await import('./database-sync.util.js');
+    for (const NODE_ENV of ['production', 'development', undefined]) {
+      expect(() =>
+        isSynchronizeAllowed({ DATABASE_SYNC: 'true', NODE_ENV }),
+      ).toThrow('only permitted when NODE_ENV=test');
+    }
+  });
+});
