@@ -4,6 +4,7 @@ import { dirname } from 'path';
 import { DataSource } from 'typeorm';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
+import { isSynchronizeAllowed } from './database-sync.util.js';
 
 /**
  * Connection pool rationale (issue #516)
@@ -48,7 +49,7 @@ export default registerAs(
       database: process.env.DATABASE_NAME || 'bridgelet',
       entities: [__dirname + '/../**/*.entity{.ts,.js}'],
       migrations: [__dirname + '/../database/migrations/*{.ts,.js}'],
-      synchronize: process.env.DATABASE_SYNC === 'false',
+      synchronize: isSynchronizeAllowed(),
       autoLoadEntities: true,
       logging: process.env.DATABASE_LOGGING === 'true',
       // ssl:
@@ -74,6 +75,8 @@ export const AppDataSource = new DataSource({
   database: process.env.DATABASE_NAME || 'bridgelet',
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/../database/migrations/*{.ts,.js}'],
+  // #726: migration-driven; never auto-sync the schema.
+  synchronize: false,
   // Connection pool settings (see rationale above)
   poolSize: POOL_CONFIG.max,
   extra: POOL_CONFIG,

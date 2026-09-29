@@ -94,9 +94,14 @@ export class Account {
   expiredAt: Date | null; // Actual time expiry was processed - set by the expiry handler, null until then
 
   /**
-   * Metadata is bounded integration context returned with the account and
-   * merged for lifecycle diagnostics. It is not a query surface, so no GIN
-   * index is maintained for it.
+   * #728: stored as `jsonb`. Metadata is bounded integration context that is
+   * write/display-only: it is returned with the account and merged for
+   * lifecycle diagnostics, but it is NOT a query surface. Do not filter or
+   * search on its contents (`@>`, `->>`, `?`), because no GIN index exists
+   * and such queries would sequentially scan `accounts`. If filtering by
+   * metadata is ever needed, add a migration creating
+   * `CREATE INDEX ... ON accounts USING GIN (metadata jsonb_path_ops)` and a
+   * matching `@Index` here first.
    */
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, any>;
