@@ -33,6 +33,20 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): void {
     errors.push('ENCRYPTION_KEY must be a 64-character hex string');
   }
 
+  // #811: createEphemeralAccount deploys a contract instance per account from
+  // this hash, so it must be present outside tests. Skipped under
+  // NODE_ENV=test so unit tests can boot without a live network.
+  if (env.NODE_ENV !== 'test') {
+    const wasmHash = env.EPHEMERAL_ACCOUNT_WASM_HASH;
+    if (!wasmHash || wasmHash.trim() === '') {
+      errors.push('EPHEMERAL_ACCOUNT_WASM_HASH is missing');
+    } else if (!/^[0-9a-f]{64}$/.test(wasmHash.trim())) {
+      errors.push(
+        'EPHEMERAL_ACCOUNT_WASM_HASH must be a 64-character hex string',
+      );
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(
       `Invalid environment configuration:\n- ${errors.join('\n- ')}`,

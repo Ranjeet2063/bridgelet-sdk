@@ -16,6 +16,9 @@ import { Registry, register } from 'prom-client';
 
 const VALID_KEY = 'G' + 'A'.repeat(55);
 const VALID_KEY2 = 'G' + 'B'.repeat(55);
+// #811: contract ID of the instance deployed for one account
+const DEPLOYED_CONTRACT_ID =
+  'CBVSQFKKFONF6MPNQSZYEXGIHLFEFT3QLNNW2XTFE3PMADLSRDVBC552';
 
 const mockRepo = {
   create: jest.fn(),
@@ -138,7 +141,10 @@ describe('AccountsService', () => {
       mockRepo.save
         .mockResolvedValueOnce(initializingAccount) // first save with INITIALIZING
         .mockResolvedValueOnce(savedAccount); // second save with PENDING_PAYMENT
-      mockStellarService.createEphemeralAccount.mockResolvedValue('txhash-abc');
+      mockStellarService.createEphemeralAccount.mockResolvedValue({
+        txHash: 'txhash-abc',
+        contractId: DEPLOYED_CONTRACT_ID,
+      });
       return savedAccount;
     }
 
@@ -150,6 +156,27 @@ describe('AccountsService', () => {
       expect(result.publicKey).toBe(VALID_KEY);
       expect(result.txHash).toBe('txhash-abc');
       expect(result.status).toBe(AccountStatus.PENDING_PAYMENT);
+    });
+
+    it('persists the contract ID returned by the deployment', async () => {
+      setupCreateSuccess();
+
+      await service.create(dto);
+
+      expect(mockRepo.save).toHaveBeenLastCalledWith(
+        expect.objectContaining({ contractId: DEPLOYED_CONTRACT_ID }),
+      );
+    });
+
+    it('does not read the shared ephemeral-account contract ID', async () => {
+      setupCreateSuccess();
+
+      await service.create(dto);
+
+      const configKeys = mockConfigService.getOrThrow.mock.calls.map(
+        (call) => call[0],
+      );
+      expect(configKeys).not.toContain('stellar.contracts.ephemeralAccount');
     });
 
     it('passes expiresIn to createEphemeralAccount for ledger conversion', async () => {

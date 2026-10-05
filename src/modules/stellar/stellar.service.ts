@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as crypto from 'crypto';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { rpc as SorobanRpc } from '@stellar/stellar-sdk';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
@@ -97,20 +98,33 @@ export class StellarService {
   }
 
   /**
-   * Creates a funded ephemeral Stellar account and initializes the
-   * EphemeralAccount Soroban contract with expiry and recovery restrictions.
+   * Creates a funded ephemeral Stellar account, deploys a dedicated
+   * EphemeralAccount contract instance for it and initializes that instance
+   * with expiry and recovery restrictions.
    *
-   * The two operations are:
+   * The three operations are:
    * 1. Horizon: CreateAccount operation (funds the account with base reserve)
-   * 2. Soroban: EphemeralAccount.initialize() (sets on-chain restrictions)
+   * 2. Soroban: contract deployment (new instance from the configured WASM hash)
+   * 3. Soroban: EphemeralAccount.initialize() on that new instance
    *
-   * If the contract initialization fails after the Horizon transaction succeeds,
-   * an error is thrown so the caller (AccountsService) can avoid persisting
-   * a record for an unrestricted account.
+   * #811: EphemeralAccount is one-instance-per-account — `initialize` returns
+   * `Error::AlreadyInitialized` (Contract error #1) on a second call and all
+   * on-chain state (status, expiry, recorded payments, swept_to) lives in that
+   * instance. A single shared contract ID therefore allowed exactly one
+   * account per deployment. Every account now gets its own instance, deployed
+   * with a random 32-byte salt, and the instance ID is what is persisted in
+   * `accounts.contractId`.
+   *
+   * If deployment or contract initialization fails after the Horizon
+   * transaction succeeds, an error is thrown so the caller (AccountsService)
+   * can avoid persisting a record for an unrestricted account.
    *
    * ⚠️ MVP Note: True atomicity between Horizon and Soroban is not possible.
-   * A failed initialize() after a successful createAccount() will leave an
+   * A failed deploy/initialize() after a successful createAccount() will leave an
    * unrestricted funded account on-chain. Issue #15 tracks the compensation strategy.
+   *
+   * @returns the Horizon funding transaction hash and the contract ID of the
+   *          instance deployed for this account.
    */
   async createEphemeralAccount(params: {
     publicKey: string;
@@ -118,10 +132,9 @@ export class StellarService {
     asset: string;
     expiresIn: number;
     recoveryAddress: string;
-    contractId: string;
     sweepControllerContractId: string;
     fundingKeypairSecret?: string;
-  }): Promise<string> {
+  }): Promise<{ txHash: string; contractId: string }> {
     this.logger.log(`Creating ephemeral account: ${params.publicKey}`);
 
     const fundingSecret =
@@ -151,10 +164,16 @@ export class StellarService {
     const result = await this.server.submitTransaction(transaction);
     this.logger.log(`Horizon account created: ${result.hash}`);
 
-    // Step 2: Initialize the Soroban contract with restrictions
+    // Step 2: Deploy a dedicated contract instance for this account (#811).
+    // The shared `stellar.contracts.ephemeralAccount` ID is deliberately not
+    // used here — it can only ever be initialized once.
+    const contractId =
+      await this.deployEphemeralAccountContract(fundingKeypair);
+
+    // Step 3: Initialize the newly deployed contract with restrictions
     const expiryLedger = await this.toExpiryLedger(params.expiresIn);
 
-    const contract = new StellarSdk.Contract(params.contractId);
+    const contract = new StellarSdk.Contract(contractId);
     const sourceAccount = await this.sorobanServer.getAccount(
       fundingKeypair.publicKey(),
     );
@@ -192,10 +211,10 @@ export class StellarService {
 
     if (initResult.status === 'ERROR') {
       this.logger.error(
-        `Contract initialize() failed for ${params.publicKey}: ${JSON.stringify(initResult.errorResult)}`,
+        `Contract initialize() failed for contract ${contractId} (${params.publicKey}): ${JSON.stringify(initResult.errorResult)}`,
       );
       throw new Error(
-        `Contract initialization failed: ${JSON.stringify(initResult.errorResult ?? 'unknown')}`,
+        `Contract initialization failed for contract ${contractId}: ${JSON.stringify(initResult.errorResult ?? 'unknown')}`,
       );
     }
 
@@ -203,9 +222,94 @@ export class StellarService {
     await this.waitForTransaction(initResult.hash);
 
     this.logger.log(
-      `Contract initialized for ${params.publicKey}, expiry ledger: ${expiryLedger}`,
+      `Contract ${contractId} initialized for ${params.publicKey}, expiry ledger: ${expiryLedger}`,
     );
-    return result.hash;
+    return { txHash: result.hash, contractId };
+  }
+
+  /**
+   * Deploys a fresh EphemeralAccount contract instance for one account (#811).
+   *
+   * `Operation.createCustomContract` derives the contract ID from
+   * (network, deployer address, salt), so a random 32-byte salt guarantees a
+   * distinct instance per account. The network reports the new contract ID as
+   * the transaction's return value, which is read back once the deployment is
+   * confirmed.
+   *
+   * @returns the contract ID of the newly deployed instance.
+   */
+  private async deployEphemeralAccountContract(
+    fundingKeypair: StellarSdk.Keypair,
+  ): Promise<string> {
+    const wasmHash = this.configService.getOrThrow<string>(
+      'stellar.contracts.ephemeralAccountWasmHash',
+    );
+
+    const sourceAccount = await this.sorobanServer.getAccount(
+      fundingKeypair.publicKey(),
+    );
+
+    const deployTransaction = new StellarSdk.TransactionBuilder(sourceAccount, {
+      fee: StellarSdk.BASE_FEE,
+      networkPassphrase: this.getNetworkPassphrase(),
+    })
+      .addOperation(
+        StellarSdk.Operation.createCustomContract({
+          address: StellarSdk.Address.fromString(fundingKeypair.publicKey()),
+          wasmHash: Buffer.from(wasmHash.trim(), 'hex'),
+          salt: crypto.randomBytes(32),
+        }),
+      )
+      .setTimeout(30)
+      .build();
+
+    const preparedTx =
+      await this.sorobanServer.prepareTransaction(deployTransaction);
+    preparedTx.sign(fundingKeypair);
+
+    const endTimer = this.sorobanRpcLatency.startTimer();
+    let deployResult: SorobanRpc.Api.SendTransactionResponse;
+    try {
+      deployResult = await this.sorobanServer.sendTransaction(preparedTx);
+    } finally {
+      endTimer();
+    }
+
+    if (deployResult.status === 'ERROR') {
+      this.logger.error(
+        `EphemeralAccount contract deployment failed for ${fundingKeypair.publicKey()}: ${JSON.stringify(deployResult.errorResult)}`,
+      );
+      throw new Error(
+        `Contract deployment failed: ${JSON.stringify(deployResult.errorResult ?? 'unknown')}`,
+      );
+    }
+
+    await this.waitForTransaction(deployResult.hash);
+
+    const confirmed = await this.sorobanServer.getTransaction(
+      deployResult.hash,
+    );
+    // `returnValue` is only present on a successful response. A confirmed
+    // deployment always carries the new contract ID there.
+    const returnValue =
+      confirmed.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS
+        ? confirmed.returnValue
+        : undefined;
+    if (!returnValue) {
+      this.logger.error(
+        `Contract deployment tx ${deployResult.hash} returned no contract ID`,
+      );
+      throw new Error(
+        `Contract deployment returned no contract ID for transaction ${deployResult.hash}`,
+      );
+    }
+
+    const contractId = StellarSdk.Address.fromScVal(returnValue).toString();
+    this.logger.log(
+      `Deployed EphemeralAccount contract ${contractId} (tx: ${deployResult.hash})`,
+    );
+
+    return contractId;
   }
 
   /**

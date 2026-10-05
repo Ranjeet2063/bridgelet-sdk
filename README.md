@@ -227,6 +227,11 @@ STELLAR_NETWORK=testnet
 STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
 SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 
+# Smart contracts
+EPHEMERAL_ACCOUNT_CONTRACT_ID=CXXXX...   # shared ID; still used by payment monitor, sweeps and ContractProvider (NOT by account creation)
+EPHEMERAL_ACCOUNT_WASM_HASH=<64 hex>      # required (except NODE_ENV=test): each account's own contract instance is deployed from this WASM hash
+SWEEP_CONTROLLER_CONTRACT_ID=CXXXX...
+
 # Security
 JWT_SECRET=your-secret-key
 CLAIM_TOKEN_EXPIRY=2592000  # 30 days

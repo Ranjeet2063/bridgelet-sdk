@@ -14,6 +14,7 @@ const mockConfigService = {
       'stellar.fundingSecret':
         'SCOCOEM6N6JNB5MAPWFRMMTMSUZW6RZ4KPKOMYUFXJKCUQUNVWDCJK2K',
       'stellar.contracts.ephemeralAccount': 'CONTRACT123',
+      'stellar.contracts.ephemeralAccountWasmHash': WASM_HASH_HEX,
     };
     const value = config[key];
     if (value === undefined) throw new Error('Config key not found: ' + key);
@@ -55,6 +56,12 @@ const FUNDING_KEYPAIR = StellarSdk.Keypair.fromSecret(FUNDING_SECRET);
 const DEST_KEY = FUNDING_KEYPAIR.publicKey();
 // Valid Soroban contract address (56 chars, C-prefix strkey)
 const CONTRACT_ID = 'CASJFOEQG3WN42CR37EKINFO77PP7UO2DT5XCNHITYT7WUHL7X3RYQFF';
+// A second, distinct contract ID used for the instance a deploy returns
+const DEPLOYED_CONTRACT_ID =
+  'CBVSQFKKFONF6MPNQSZYEXGIHLFEFT3QLNNW2XTFE3PMADLSRDVBC552';
+// #811: 64 hex chars, the uploaded ephemeral-account WASM hash
+const WASM_HASH_HEX =
+  '5e667ea0687341bdccc81538492143b573777dd04b2450cdeb89b02cee62c58e';
 
 describe('StellarService', () => {
   let service: StellarService;
@@ -234,7 +241,6 @@ describe('StellarService', () => {
       asset: 'native',
       expiresIn: 3600,
       recoveryAddress: FUNDING_KEYPAIR.publicKey(),
-      contractId: CONTRACT_ID,
       sweepControllerContractId: CONTRACT_ID,
       fundingKeypairSecret: FUNDING_SECRET,
     };
@@ -257,23 +263,28 @@ describe('StellarService', () => {
       sorobanServer.prepareTransaction.mockImplementation(
         (tx: StellarSdk.Transaction) => Promise.resolve(tx),
       );
-      sorobanServer.sendTransaction.mockResolvedValue({
-        status: 'PENDING',
-        hash: 'soroban-tx-hash',
-      });
+      sorobanServer.sendTransaction
+        .mockResolvedValueOnce({ status: 'PENDING', hash: 'deploy-tx-hash' })
+        .mockResolvedValueOnce({ status: 'PENDING', hash: 'soroban-tx-hash' });
+      // The network reports the new contract ID as the deploy tx return value
       sorobanServer.getTransaction.mockResolvedValue({
         status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
+        returnValue:
+          StellarSdk.Address.fromString(DEPLOYED_CONTRACT_ID).toScVal(),
       });
 
       jest.spyOn(service, 'getCurrentLedger').mockResolvedValue(1000);
     }
 
-    it('returns the Horizon transaction hash on success', async () => {
+    it('returns the Horizon transaction hash and the deployed contract ID on success', async () => {
       setupHappyPath('expected-tx-hash');
 
       const result = await service.createEphemeralAccount(params);
 
-      expect(result).toBe('expected-tx-hash');
+      expect(result).toEqual({
+        txHash: 'expected-tx-hash',
+        contractId: DEPLOYED_CONTRACT_ID,
+      });
     });
 
     it('calls submitTransaction on Horizon', async () => {
@@ -284,23 +295,118 @@ describe('StellarService', () => {
       expect(horizonServer.submitTransaction).toHaveBeenCalledTimes(1);
     });
 
-    it('calls sendTransaction on Soroban for contract init', async () => {
+    it('sends two Soroban transactions: the deployment and the initialize', async () => {
       setupHappyPath();
 
       await service.createEphemeralAccount(params);
 
-      expect(sorobanServer.sendTransaction).toHaveBeenCalledTimes(1);
+      expect(sorobanServer.sendTransaction).toHaveBeenCalledTimes(2);
     });
 
-    it('throws when Soroban contract init returns ERROR status', async () => {
+    it('deploys a contract instance with the configured WASM hash and a 32-byte salt', async () => {
       setupHappyPath();
+
+      await service.createEphemeralAccount(params);
+
+      const deployTx = sorobanServer.prepareTransaction.mock
+        .calls[0][0] as StellarSdk.Transaction;
+      const deployOp = deployTx.toEnvelope().v1().tx().operations()[0];
+      expect(deployOp.body().switch().name).toBe('invokeHostFunction');
+
+      const hostFn = deployOp.body().invokeHostFunctionOp().hostFunction();
+      expect(hostFn.switch().name).toBe('hostFunctionTypeCreateContractV2');
+
+      const createArgs = hostFn.createContractV2();
+      expect(createArgs.executable().switch().name).toBe(
+        'contractExecutableWasm',
+      );
+      expect(Buffer.from(createArgs.executable().wasmHash())).toEqual(
+        Buffer.from(WASM_HASH_HEX, 'hex'),
+      );
+
+      const preimage = createArgs.contractIdPreimage();
+      expect(preimage.switch().name).toBe('contractIdPreimageFromAddress');
+      const fromAddress = preimage.fromAddress();
+      expect(fromAddress.salt()).toHaveLength(32);
+      expect(
+        StellarSdk.Address.fromScAddress(fromAddress.address()).toString(),
+      ).toBe(FUNDING_KEYPAIR.publicKey());
+    });
+
+    it('initializes the contract instance returned by the deployment', async () => {
+      setupHappyPath();
+
+      await service.createEphemeralAccount(params);
+
+      const initTx = sorobanServer.prepareTransaction.mock
+        .calls[1][0] as StellarSdk.Transaction;
+      const invokeOp = initTx
+        .toEnvelope()
+        .v1()
+        .tx()
+        .operations()[0]
+        .body()
+        .invokeHostFunctionOp();
+      const invokeArgs = invokeOp.hostFunction().invokeContract();
+      expect(
+        StellarSdk.Address.fromScAddress(
+          invokeArgs.contractAddress(),
+        ).toString(),
+      ).toBe(DEPLOYED_CONTRACT_ID);
+      expect(Buffer.from(invokeArgs.functionName()).toString()).toBe(
+        'initialize',
+      );
+    });
+
+    it('does not read the shared ephemeral-account contract ID', async () => {
+      const configSpy = jest.spyOn(mockConfigService, 'getOrThrow');
+      setupHappyPath();
+
+      await service.createEphemeralAccount(params);
+
+      expect(configSpy.mock.calls.map((call) => call[0])).not.toContain(
+        'stellar.contracts.ephemeralAccount',
+      );
+    });
+
+    it('throws when the contract deployment returns ERROR status', async () => {
+      setupHappyPath();
+      sorobanServer.sendTransaction.mockReset();
       sorobanServer.sendTransaction.mockResolvedValue({
         status: 'ERROR',
-        errorResult: { message: 'contract error' },
+        errorResult: { message: 'deployment error' },
       });
 
       await expect(service.createEphemeralAccount(params)).rejects.toThrow(
-        'Contract initialization failed',
+        'Contract deployment failed',
+      );
+      // initialize is never attempted for a contract that was not deployed
+      expect(sorobanServer.sendTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws when the deployment transaction is confirmed without a contract ID', async () => {
+      setupHappyPath();
+      sorobanServer.getTransaction.mockResolvedValue({
+        status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
+      });
+
+      await expect(service.createEphemeralAccount(params)).rejects.toThrow(
+        'returned no contract ID',
+      );
+    });
+
+    it('throws when initialize() fails after a successful deployment', async () => {
+      setupHappyPath();
+      sorobanServer.sendTransaction
+        .mockReset()
+        .mockResolvedValueOnce({ status: 'PENDING', hash: 'deploy-tx-hash' })
+        .mockResolvedValueOnce({
+          status: 'ERROR',
+          errorResult: { message: 'contract error' },
+        });
+
+      await expect(service.createEphemeralAccount(params)).rejects.toThrow(
+        `Contract initialization failed for contract ${DEPLOYED_CONTRACT_ID}`,
       );
     });
   });
@@ -595,7 +701,6 @@ describe('StellarService', () => {
           asset: 'native',
           expiresIn: 3600,
           recoveryAddress: FUNDING_KEYPAIR.publicKey(),
-          contractId: CONTRACT_ID,
           sweepControllerContractId: CONTRACT_ID,
           fundingKeypairSecret: FUNDING_SECRET,
         }),
@@ -634,7 +739,6 @@ describe('StellarService', () => {
           asset: 'native',
           expiresIn: 3600,
           recoveryAddress: FUNDING_KEYPAIR.publicKey(),
-          contractId: CONTRACT_ID,
           sweepControllerContractId: CONTRACT_ID,
           fundingKeypairSecret: FUNDING_SECRET,
         }),

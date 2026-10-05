@@ -1,5 +1,37 @@
 # Deployment
 
+## `EPHEMERAL_ACCOUNT_WASM_HASH` (issue #811)
+
+Each `POST /accounts` deploys its **own** `EphemeralAccount` contract instance
+and initializes that instance. `EphemeralAccount` in bridgelet-core holds all of
+an account's on-chain state (status, expiry ledger, recorded payments,
+`swept_to`) and its `initialize()` returns `Error::AlreadyInitialized`
+(`Error(Contract, #1)`) on any second call — so a single shared contract ID
+allowed exactly one account per deployment.
+
+- `EPHEMERAL_ACCOUNT_WASM_HASH` is the 64-hex-char WASM hash of the uploaded
+  ephemeral-account contract. It is required outside tests and validated by
+  `validateEnv()` in `src/config/env-validation.ts`, which reports
+  `EPHEMERAL_ACCOUNT_WASM_HASH is missing` or
+  `EPHEMERAL_ACCOUNT_WASM_HASH must be a 64-character hex string`. A hash that
+  is not uploaded on the target network makes the deploy transaction fail, and
+  the account is marked `FAILED` rather than handed to the caller.
+- On testnet the value is `ephemeralAccountWasmHash` in
+  `bridgelet-core/deployments/testnet.json`. On mainnet, take it from the
+  `stellar contract upload` output for the mainnet build.
+- `stellar.contracts.ephemeralAccount` (`EPHEMERAL_ACCOUNT_CONTRACT_ID`) is still
+  required by the payment monitor, sweeps and `ContractProvider`, but account
+  creation never initializes it.
+- Deploys are salted with 32 random bytes, so retrying an account creation
+  cannot collide with an earlier deployment.
+- Redeploy the contract and bump this value (and
+  `EPHEMERAL_ACCOUNT_CONTRACT_VERSION`) whenever a new ephemeral-account WASM is
+  uploaded; instances deployed from an older hash keep running against the
+  older code.
+- Each new account costs one extra deploy transaction (rent + fees) on top of
+  the existing `createAccount` and `initialize` transactions. Size the funding
+  account accordingly.
+
 ## Database connection pool (issue #516)
 
 Pool settings live in two places that must be kept in sync:

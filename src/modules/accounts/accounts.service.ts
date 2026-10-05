@@ -165,19 +165,19 @@ export class AccountsService {
     await this.accountsRepository.save(account);
 
     try {
-      const txHash = await this.stellarService.createEphemeralAccount({
-        publicKey: ephemeralKeypair.publicKey(),
-        amount: createAccountDto.amount,
-        asset,
-        expiresIn: createAccountDto.expiresIn,
-        recoveryAddress: createAccountDto.recovery_address,
-        contractId: this.configService.getOrThrow<string>(
-          'stellar.contracts.ephemeralAccount',
-        ),
-        sweepControllerContractId: this.configService.getOrThrow<string>(
-          'stellar.contracts.sweepController',
-        ),
-      });
+      // #811: no contract ID is passed in — createEphemeralAccount deploys a
+      // dedicated EphemeralAccount instance per account and returns its ID.
+      const { txHash, contractId } =
+        await this.stellarService.createEphemeralAccount({
+          publicKey: ephemeralKeypair.publicKey(),
+          amount: createAccountDto.amount,
+          asset,
+          expiresIn: createAccountDto.expiresIn,
+          recoveryAddress: createAccountDto.recovery_address,
+          sweepControllerContractId: this.configService.getOrThrow<string>(
+            'stellar.contracts.sweepController',
+          ),
+        });
 
       // Both Horizon and contract succeeded — advance to real status.
       // #445: validated against the single source of truth in
@@ -189,9 +189,7 @@ export class AccountsService {
         `accountsService.create accountId=${account.id}`,
       );
       account.status = AccountStatus.PENDING_PAYMENT;
-      account.contractId = this.configService.getOrThrow<string>(
-        'stellar.contracts.ephemeralAccount',
-      );
+      account.contractId = contractId;
       await this.accountsRepository.save(account);
 
       await this.webhooksService.triggerEvent('account.created', {
