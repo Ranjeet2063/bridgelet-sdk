@@ -73,20 +73,41 @@ export class SweepsService {
         sweepExecutionRequest.destinationAddress,
       );
     } else {
+      // #812: execute_sweep must run against the instance recorded on the
+      // account. The shared `stellar.contracts.ephemeralAccount` config ID is
+      // deliberately neither read nor used as a fallback — for accounts
+      // created since #811 it is a different account's instance. (Legacy rows
+      // that stored that same ID in `contractId` keep working, because the
+      // shared contract really does hold their state.)
+      if (!sweepExecutionRequest.contractId) {
+        throw new Error(
+          `Cannot sweep account ${sweepExecutionRequest.accountId}: no ` +
+            'EphemeralAccount contract ID is recorded for it.',
+        );
+      }
+      const ephemeralAccountContractId = sweepExecutionRequest.contractId;
+
+      // #812: the SweepController's nonce is a single global counter that is
+      // incremented after every successful sweep, so it has to be read from
+      // the contract and signed explicitly. Signing a stale value (it used to
+      // default to 0n) makes every sweep after the first one ever executed by
+      // a controller fail signature verification on-chain.
+      const sweepControllerContractId = this.configService.getOrThrow<string>(
+        'stellar.contracts.sweepController',
+      );
+      const nonce = await this.stellarService.getSweepNonce(
+        sweepControllerContractId,
+      );
+
       // Step 2: Generate authorization signature for the contract call
       const authSignature = this.contractProvider.generateAuthSignature({
         ephemeralPublicKey: sweepExecutionRequest.ephemeralPublicKey,
         destinationAddress: sweepExecutionRequest.destinationAddress,
+        contractId: ephemeralAccountContractId,
+        nonce,
       });
 
       // Step 3: Submit execute_sweep() on the SweepController Soroban contract
-      const sweepControllerContractId = this.configService.getOrThrow<string>(
-        'stellar.contracts.sweepController',
-      );
-      const ephemeralAccountContractId = this.configService.getOrThrow<string>(
-        'stellar.contracts.ephemeralAccount',
-      );
-
       await this.stellarService.executeSweep({
         sweepControllerContractId,
         ephemeralAccountContractId,

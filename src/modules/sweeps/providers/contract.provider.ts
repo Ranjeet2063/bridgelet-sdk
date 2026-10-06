@@ -30,7 +30,6 @@ export const UNKNOWN_CONTRACT_VERSION = 'unknown';
 @Injectable()
 export class ContractProvider {
   private readonly logger = new Logger(ContractProvider.name);
-  private readonly contractId: string;
   private readonly contractVersion: string;
   private readonly sorobanRpcUrl: string;
   private readonly networkPassphrase: string;
@@ -44,9 +43,6 @@ export class ContractProvider {
   private readonly server: rpc.Server;
 
   constructor(private readonly configService: ConfigService) {
-    this.contractId = this.configService.getOrThrow<string>(
-      'stellar.contracts.ephemeralAccount',
-    );
     this.sorobanRpcUrl = this.configService.getOrThrow<string>(
       'stellar.sorobanRpcUrl',
     );
@@ -74,9 +70,7 @@ export class ContractProvider {
 
     this.server = new rpc.Server(this.sorobanRpcUrl);
 
-    this.logger.log(
-      `Initialized ContractProvider with contract: ${this.contractId}`,
-    );
+    this.logger.log('Initialized ContractProvider');
   }
 
   /**
@@ -94,8 +88,9 @@ export class ContractProvider {
       // Reuse the shared Soroban RPC connection built in the constructor (#650)
       const server = this.server;
 
-      // Create contract instance
-      const contract = new Contract(this.contractId);
+      // #812: the account's own EphemeralAccount instance, passed per call —
+      // there is no single shared contract any more.
+      const contract = new Contract(params.contractId);
 
       // Prepare destination address parameter
       const destination = Address.fromString(params.destinationAddress);
@@ -218,11 +213,12 @@ export class ContractProvider {
       'stellar.contracts.sweepController',
     );
 
-    // Fetch the current nonce from the SweepController contract before signing.
-    // The nonce must match what the contract will read during verification.
-    // This call is synchronous here for interface compatibility; the caller
-    // (SweepsService) should ensure the nonce is current before invoking.
-    const nonce = params.nonce ?? 0n;
+    // #812: the nonce comes from the caller, which reads it from the
+    // SweepController with StellarService.getSweepNonce(). It is deliberately
+    // NOT defaulted here: signing `0n` when the caller forgot to read the real
+    // value produced a signature the controller rejects for every sweep after
+    // the first one ever executed.
+    const nonce = params.nonce;
 
     return SweepSignerUtil.sign(
       params.destinationAddress,
@@ -235,6 +231,11 @@ export class ContractProvider {
   /**
    * Check contract status and version.
    *
+   * `contractId` is the EphemeralAccount instance to report on (#812): it is
+   * passed per call because, since #811, there is no single shared
+   * EphemeralAccount contract any more — the ID to describe depends on which
+   * account the caller is asking about.
+   *
    * `version` comes from `stellar.contracts.ephemeralAccountVersion`
    * (`EPHEMERAL_ACCOUNT_CONTRACT_VERSION`) and is
    * {@link UNKNOWN_CONTRACT_VERSION} when that is not configured. It is
@@ -244,12 +245,12 @@ export class ContractProvider {
    *
    * Verified for #709 (duplicate of the already-resolved #648, fixed in PR #781).
    */
-  public getContractInfo(): {
+  public getContractInfo(contractId: string): {
     contractId: string;
     version: string;
   } {
     return {
-      contractId: this.contractId,
+      contractId,
       version: this.contractVersion,
     };
   }
