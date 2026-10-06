@@ -604,6 +604,66 @@ export class StellarService {
   }
 
   /**
+   * Reads the SweepController's current sweep nonce via a read-only simulation
+   * of `get_nonce()` — no signing, no transaction (#812).
+   *
+   * The nonce is a single global counter: `initialize()` sets it to 0 and every
+   * successful `execute_sweep()`/`claim()` increments it. `verify_sweep_auth`
+   * rebuilds the signed message from the value in storage, so the signature
+   * produced for a stale nonce is rejected on-chain. Callers must read it
+   * immediately before signing.
+   */
+  async getSweepNonce(sweepControllerContractId: string): Promise<bigint> {
+    const contract = new StellarSdk.Contract(sweepControllerContractId);
+
+    // get_nonce is a read-only call — use simulateTransaction, no signing needed
+    const dummyKeypair = StellarSdk.Keypair.random();
+    const sourceAccount = new StellarSdk.Account(dummyKeypair.publicKey(), '0');
+
+    const transaction = new StellarSdk.TransactionBuilder(sourceAccount, {
+      fee: StellarSdk.BASE_FEE,
+      networkPassphrase: this.getNetworkPassphrase(),
+    })
+      .addOperation(contract.call('get_nonce'))
+      .setTimeout(30)
+      .build();
+
+    const endTimer = this.sorobanRpcLatency.startTimer();
+    let simResult: SorobanRpc.Api.SimulateTransactionResponse;
+    try {
+      simResult = await this.sorobanServer.simulateTransaction(transaction);
+    } finally {
+      endTimer();
+    }
+
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`get_nonce simulation failed: ${simResult.error}`);
+    }
+
+    const returnVal = simResult.result?.retval;
+    if (!returnVal) {
+      throw new Error(
+        `get_nonce returned no value for ${sweepControllerContractId}`,
+      );
+    }
+
+    // The contract returns u64 (Rust `u64`), which the SDK surfaces as
+    // `ScVal::U64`.
+    if (returnVal.switch().name !== 'scvU64') {
+      throw new Error(
+        `get_nonce returned unexpected ScVal type for ` +
+          `${sweepControllerContractId}: ${returnVal.switch().name}`,
+      );
+    }
+
+    // `ScVal::u64()` returns a js-xdr `UnsignedHyper` wrapper, not a bigint.
+    // Convert via its decimal string: `SweepSignerUtil.buildMessage` feeds the
+    // nonce to `Buffer.writeBigUInt64BE`, which throws a TypeError on anything
+    // that is not a real bigint.
+    return BigInt(returnVal.u64().toString());
+  }
+
+  /**
    * Polls Soroban RPC until a transaction is confirmed or fails.
    * Used after sendTransaction() which is async by nature.
    */

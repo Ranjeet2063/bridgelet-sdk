@@ -17,6 +17,11 @@ import { Registry, register } from 'prom-client';
 const MOCK_AUTH_SIGNATURE = Buffer.alloc(64, 1);
 const MOCK_TX_HASH = 'abc123txhash';
 const MOCK_CONTRACT_AUTH_HASH = 'deadbeef'.repeat(8); // 64-char hex
+// #812: the account's own EphemeralAccount instance, and a SweepController
+// nonce that is deliberately NOT 0 so a hard-coded 0n would be caught.
+const MOCK_ACCOUNT_CONTRACT_ID =
+  'CACCOUNTINSTANCE0000000000000000000000000000000000000000000';
+const MOCK_SWEEP_NONCE = 7n;
 
 const validRequest = {
   accountId: 'test-account-id',
@@ -27,6 +32,7 @@ const validRequest = {
     'GBULQKZ7SA56UKRI6LX2IB6XH3GJW2L34BMTOWMQFJBAQNPSHJJNOTGN',
   amount: '100.0000000',
   asset: 'native',
+  contractId: MOCK_ACCOUNT_CONTRACT_ID,
 };
 
 const mockTxResult = {
@@ -58,7 +64,11 @@ describe('SweepsService', () => {
   let transactionProvider: {
     executeSweepTransaction: jest.Mock<() => Promise<any>>;
   };
-  let stellarService: { executeSweep: jest.Mock<() => Promise<any>> };
+  let stellarService: {
+    executeSweep: jest.Mock<() => Promise<any>>;
+    getSweepNonce: jest.Mock<() => Promise<any>>;
+  };
+  let configMock: { getOrThrow: jest.Mock };
 
   beforeEach(async () => {
     validationProvider = {
@@ -80,12 +90,15 @@ describe('SweepsService', () => {
 
     stellarService = {
       executeSweep: jest.fn<any>().mockResolvedValue(undefined),
+      getSweepNonce: jest.fn<any>().mockResolvedValue(MOCK_SWEEP_NONCE),
     };
 
-    const configMock = {
+    configMock = {
       getOrThrow: jest.fn((key: string) => {
         const map: Record<string, string> = {
           'stellar.contracts.sweepController': 'SWEEP_CTRL_CONTRACT_ID',
+          // #812: still configured for the payment monitor / ContractProvider,
+          // but the sweep path must never read it.
           'stellar.contracts.ephemeralAccount': 'EPHEMERAL_CONTRACT_ID',
         };
         if (!(key in map)) throw new Error(`Config key not found: ${key}`);
@@ -138,17 +151,62 @@ describe('SweepsService', () => {
 
     it('generates auth signature via ContractProvider', async () => {
       await service.executeSweep(validRequest);
+      // #812: the nonce read from the SweepController is signed, not 0n.
       expect(contractProvider.generateAuthSignature).toHaveBeenCalledWith({
         ephemeralPublicKey: validRequest.ephemeralPublicKey,
         destinationAddress: validRequest.destinationAddress,
+        contractId: MOCK_ACCOUNT_CONTRACT_ID,
+        nonce: MOCK_SWEEP_NONCE,
       });
+    });
+
+    // -----------------------------------------------------------------------
+    // #812: per-account contract ID + live sweep nonce
+    // -----------------------------------------------------------------------
+
+    it('reads the sweep nonce from the SweepController before signing', async () => {
+      await service.executeSweep(validRequest);
+
+      expect(stellarService.getSweepNonce).toHaveBeenCalledWith(
+        'SWEEP_CTRL_CONTRACT_ID',
+      );
+    });
+
+    it('signs the nonce that was read, never a stale 0n', async () => {
+      stellarService.getSweepNonce.mockResolvedValue(41n);
+
+      await service.executeSweep(validRequest);
+
+      const signedParams = contractProvider.generateAuthSignature.mock
+        .calls[0][0] as { nonce: bigint };
+      expect(signedParams.nonce).toBe(41n);
+      expect(signedParams.nonce).not.toBe(0n);
+    });
+
+    it("submits execute_sweep against the account's own contract instance", async () => {
+      await service.executeSweep(validRequest);
+
+      expect(stellarService.executeSweep).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ephemeralAccountContractId: MOCK_ACCOUNT_CONTRACT_ID,
+        }),
+      );
+    });
+
+    it('never reads the shared ephemeral-account contract ID from config', async () => {
+      await service.executeSweep(validRequest);
+
+      expect(
+        configMock.getOrThrow.mock.calls.map((call) => call[0]),
+      ).not.toContain('stellar.contracts.ephemeralAccount');
     });
 
     it('submits the contract call via StellarService.executeSweep()', async () => {
       await service.executeSweep(validRequest);
       expect(stellarService.executeSweep).toHaveBeenCalledWith({
         sweepControllerContractId: 'SWEEP_CTRL_CONTRACT_ID',
-        ephemeralAccountContractId: 'EPHEMERAL_CONTRACT_ID',
+        // #812: the account's own instance, not the shared config value.
+        ephemeralAccountContractId: MOCK_ACCOUNT_CONTRACT_ID,
         destination: validRequest.destinationAddress,
         authSignature: MOCK_AUTH_SIGNATURE,
         signerSecret: validRequest.ephemeralSecret,
@@ -298,6 +356,9 @@ describe('SweepsService', () => {
 
       expect(contractProvider.generateAuthSignature).not.toHaveBeenCalled();
       expect(stellarService.executeSweep).not.toHaveBeenCalled();
+      // A PARTIAL_SWEEP retry never touches the contract, so it must not need
+      // (or read) the sweep nonce either.
+      expect(stellarService.getSweepNonce).not.toHaveBeenCalled();
       // The Horizon payment still runs to retry the failed payment.
       expect(transactionProvider.executeSweepTransaction).toHaveBeenCalledWith({
         ephemeralSecret: validRequest.ephemeralSecret,
@@ -333,6 +394,55 @@ describe('SweepsService', () => {
       expect(result.error).toBe('Horizon offline');
       // Skipped contract side did NOT happen.
       expect(contractProvider.generateAuthSignature).not.toHaveBeenCalled();
+      expect(stellarService.executeSweep).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // #812: missing per-account contract ID
+  // -------------------------------------------------------------------------
+
+  describe('executeSweep — account.contractId is null', () => {
+    const nullContractRequest = { ...validRequest, contractId: null };
+
+    it('throws an error naming the account', async () => {
+      await expect(service.executeSweep(nullContractRequest)).rejects.toThrow(
+        /test-account-id/,
+      );
+      await expect(service.executeSweep(nullContractRequest)).rejects.toThrow(
+        /no EphemeralAccount contract ID/,
+      );
+    });
+
+    it('does not sign, does not call the contract and does not pay', async () => {
+      await expect(service.executeSweep(nullContractRequest)).rejects.toThrow();
+
+      expect(stellarService.getSweepNonce).not.toHaveBeenCalled();
+      expect(contractProvider.generateAuthSignature).not.toHaveBeenCalled();
+      expect(stellarService.executeSweep).not.toHaveBeenCalled();
+      expect(
+        transactionProvider.executeSweepTransaction,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('propagates the failure instead of returning a partial result', async () => {
+      // A missing contract ID is a data problem, not a "contract authorized but
+      // the payment failed" case, so it must not be reported as isPartial.
+      const result = await service
+        .executeSweep(nullContractRequest)
+        .then((r) => r)
+        .catch((e: unknown) => e);
+
+      expect(result).toBeInstanceOf(Error);
+    });
+
+    it('still allows a PARTIAL_SWEEP retry, which never touches the contract', async () => {
+      const result = await service.executeSweep({
+        ...nullContractRequest,
+        skipContractAuth: true,
+      });
+
+      expect(result.success).toBe(true);
       expect(stellarService.executeSweep).not.toHaveBeenCalled();
     });
   });

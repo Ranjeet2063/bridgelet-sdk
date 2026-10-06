@@ -192,6 +192,10 @@ export class ClaimRedemptionProvider {
         destinationAddress,
         amount: account.amount,
         asset: account.asset,
+        // #812: sweep the instance recorded on the account rather than the
+        // shared config ID, which #811 stopped assigning to new accounts
+        // and which therefore belongs to a different account for those rows.
+        contractId: account.contractId,
         // PARTIAL_SWEEP retry: contract is already in Swept state from the
         // prior partial failure, so re-invoking execute_sweep would revert.
         // Skip steps 2-3 and only re-submit the Horizon payment.

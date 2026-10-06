@@ -183,9 +183,20 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
     account: Account,
     record: StellarSdk.Horizon.ServerApi.PaymentOperationRecord,
   ): Promise<void> {
-    const contractId = this.configService.getOrThrow<string>(
-      'stellar.contracts.ephemeralAccount',
-    );
+    // #812: record the payment on the EphemeralAccount instance recorded on
+    // the account. Accounts created since #811 each get their own instance,
+    // so the shared `stellar.contracts.ephemeralAccount` config ID must not be
+    // used here — for those rows it is a different account's instance.
+    // (Legacy rows that stored that same ID in `contractId` keep working,
+    // because the shared contract really does hold their state.)
+    if (!account.contractId) {
+      throw new Error(
+        `Cannot record payment for account ${account.id}: no ` +
+          'EphemeralAccount contract ID is recorded for it.',
+      );
+    }
+    const contractId = account.contractId;
+
     const signerSecret = this.configService.getOrThrow<string>(
       'stellar.fundingSecret',
     );

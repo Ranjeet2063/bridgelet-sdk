@@ -109,6 +109,11 @@ describe('ContractProvider', () => {
       'GBBM6BKZPEHWYO3E3YKRETPKQ5MRNWSKA722GHBMZABXD4F2J2RROMSG',
     destinationAddress:
       'GD5J6HLF5666X4AZLTFTXLY2CQZBS2LBJBIMYV3SYGQ5OAQY5QO4XRNM',
+    // #812: the EphemeralAccount instance is supplied per call, and the nonce
+    // is required. A non-zero nonce here is deliberate — it proves no `0n`
+    // fallback is being applied.
+    contractId: 'CDUMMYACCOUNTINSTANCE123456789ABCDEFGHIJKLMNOP',
+    nonce: 9n,
   };
 
   // Default config values
@@ -269,7 +274,7 @@ describe('ContractProvider', () => {
       );
     });
 
-    it('should throw error when contract ID config is missing', async () => {
+    it('should throw error when required config is missing', async () => {
       const invalidModule = Test.createTestingModule({
         providers: [
           ContractProvider,
@@ -281,7 +286,7 @@ describe('ContractProvider', () => {
               ),
               getOrThrow: jest.fn(() => {
                 throw new Error(
-                  'Configuration key not found: stellar.contracts.ephemeralAccount',
+                  'Configuration key not found: stellar.sorobanRpcUrl',
                 );
               }),
             },
@@ -290,6 +295,41 @@ describe('ContractProvider', () => {
       });
 
       await expect(invalidModule.compile()).rejects.toThrow();
+    });
+
+    it('should no longer require a shared ephemeral-account contract ID (#812)', async () => {
+      // #812: the provider used to bind
+      // `stellar.contracts.ephemeralAccount` in its constructor. There is no
+      // shared EphemeralAccount contract any more — each account has its own
+      // instance passed per call — so construction must succeed without it.
+      const moduleWithoutSharedId = await Test.createTestingModule({
+        providers: [
+          ContractProvider,
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn(
+                (key: string) => mockConfig[key as keyof typeof mockConfig],
+              ),
+              getOrThrow: jest.fn((key: string) => {
+                if (key === 'stellar.contracts.ephemeralAccount') {
+                  throw new Error(
+                    'Configuration key not found: stellar.contracts.ephemeralAccount',
+                  );
+                }
+                return mockConfig[key as keyof typeof mockConfig];
+              }),
+            },
+          },
+        ],
+      }).compile();
+
+      const providerWithoutSharedId =
+        moduleWithoutSharedId.get<ContractProvider>(ContractProvider);
+
+      await providerWithoutSharedId.authorizeSweep(validParams);
+
+      expect(Contract).toHaveBeenCalledWith(validParams.contractId);
     });
 
     it('should throw error when RPC URL config is missing', async () => {
@@ -346,19 +386,37 @@ describe('ContractProvider', () => {
    * Tests contract information retrieval
    */
   describe('getContractInfo', () => {
-    it('should return contract ID and the configured version', () => {
-      const info = provider.getContractInfo();
+    it('should return the contract ID passed in and the configured version', () => {
+      // #812: the ID is now a parameter — the provider holds no shared
+      // EphemeralAccount contract, so it can only report what it is asked
+      // about. The version assertion is unchanged.
+      const info = provider.getContractInfo(validParams.contractId);
 
       expect(info).toEqual({
-        contractId: mockConfig['stellar.contracts.ephemeralAccount'],
+        contractId: validParams.contractId,
         version: mockConfig['stellar.contracts.ephemeralAccountVersion'],
       });
+    });
+
+    it('should report whichever instance it is given', () => {
+      // Two accounts, two instances (#812): the reported ID must follow the
+      // argument rather than a value bound at construction.
+      const otherContractId = 'CDUMMYOTHERACCOUNT123456789ABCDEFGHIJKL';
+
+      expect(provider.getContractInfo(validParams.contractId).contractId).toBe(
+        validParams.contractId,
+      );
+      expect(provider.getContractInfo(otherContractId).contractId).toBe(
+        otherContractId,
+      );
     });
 
     it('should not return the previously hardcoded version', () => {
       // #648: guards against reintroducing a literal that drifts from the
       // deployed contract.
-      expect(provider.getContractInfo().version).not.toBe('0.1.0');
+      expect(provider.getContractInfo(validParams.contractId).version).not.toBe(
+        '0.1.0',
+      );
     });
 
     it('should report the version as unknown when it is not configured', async () => {
@@ -385,20 +443,20 @@ describe('ContractProvider', () => {
       const providerWithoutVersion =
         moduleWithoutVersion.get<ContractProvider>(ContractProvider);
 
-      expect(providerWithoutVersion.getContractInfo().version).toBe(
-        UNKNOWN_CONTRACT_VERSION,
-      );
+      expect(
+        providerWithoutVersion.getContractInfo(validParams.contractId).version,
+      ).toBe(UNKNOWN_CONTRACT_VERSION);
     });
 
     it('should return consistent contract ID', () => {
-      const info1 = provider.getContractInfo();
-      const info2 = provider.getContractInfo();
+      const info1 = provider.getContractInfo(validParams.contractId);
+      const info2 = provider.getContractInfo(validParams.contractId);
 
       expect(info1.contractId).toBe(info2.contractId);
     });
 
     it('should have properly typed return value', () => {
-      const info = provider.getContractInfo();
+      const info = provider.getContractInfo(validParams.contractId);
 
       expect(typeof info.contractId).toBe('string');
       expect(typeof info.version).toBe('string');
@@ -438,12 +496,12 @@ describe('ContractProvider', () => {
       expect(rpc.Server).toHaveBeenCalledTimes(1);
     });
 
-    it('should create contract instance with correct contract ID', async () => {
+    it('should create contract instance with the per-account contract ID', async () => {
+      // #812: the ID comes from the call, not from a value bound in the
+      // constructor (which no longer exists).
       await provider.authorizeSweep(validParams);
 
-      expect(Contract).toHaveBeenCalledWith(
-        mockConfig['stellar.contracts.ephemeralAccount'],
-      );
+      expect(Contract).toHaveBeenCalledWith(validParams.contractId);
       expect(Contract).toHaveBeenCalledTimes(1);
     });
 
@@ -959,6 +1017,26 @@ describe('ContractProvider', () => {
         1n,
         expect.any(String),
         expect.any(String),
+      );
+    });
+
+    it('should sign the nonce it is given, never an implicit 0n (#812)', () => {
+      // #812 regression guard. `generateAuthSignature` used to default the
+      // nonce to `0n`, which is correct only for the first sweep ever executed
+      // by a controller; every later sweep was rejected on-chain.
+      provider.generateAuthSignature({ ...validParams, nonce: 12n });
+
+      expect(SweepSignerUtil.sign).toHaveBeenCalledWith(
+        validParams.destinationAddress,
+        12n,
+        mockConfig['stellar.contracts.sweepController'],
+        mockConfig['stellar.sweepSigningKeySeed'],
+      );
+      expect(SweepSignerUtil.sign).not.toHaveBeenCalledWith(
+        validParams.destinationAddress,
+        0n,
+        expect.anything(),
+        expect.anything(),
       );
     });
 

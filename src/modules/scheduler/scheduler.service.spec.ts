@@ -148,6 +148,53 @@ describe('SchedulerService', () => {
       });
     });
 
+    // -----------------------------------------------------------------------
+    // #812 acceptance criterion: record_payment, execute_sweep and expire must
+    // all target the same account.contractId. The expiry job already read the
+    // per-account instance (scheduler.service.ts is out of #812's change
+    // scope), so this locks the behaviour against regression. Test-only.
+    // -----------------------------------------------------------------------
+
+    it('expires each account against its own contractId, never a shared one', async () => {
+      const first = makeAccount({
+        id: 'acc-uuid-a',
+        status: AccountStatus.PENDING_PAYMENT,
+        contractId: 'CFIRSTOWNINSTANCE123456789ABCDEFGHIJKLMNOPQ',
+      });
+      const second = makeAccount({
+        id: 'acc-uuid-b',
+        status: AccountStatus.PENDING_CLAIM,
+        contractId: 'CSECONDOWNINSTANCE123456789ABCDEFGHIJKLNO',
+      });
+      accountsRepo.find.mockResolvedValueOnce([first, second]);
+
+      await service.runExpiryJob();
+
+      expect(stellarService.expireAccount).toHaveBeenCalledWith({
+        contractId: first.contractId,
+        signerSecret: 'SFUNDING_SECRET',
+      });
+      expect(stellarService.expireAccount).toHaveBeenCalledWith({
+        contractId: second.contractId,
+        signerSecret: 'SFUNDING_SECRET',
+      });
+      expect(stellarService.expireAccount).not.toHaveBeenCalledWith(
+        expect.objectContaining({ contractId: 'CONTRACT123' }),
+      );
+    });
+
+    it('does not call expireAccount() when contractId is null', async () => {
+      const account = makeAccount({
+        status: AccountStatus.PENDING_PAYMENT,
+        contractId: null,
+      });
+      accountsRepo.find.mockResolvedValueOnce([account]);
+
+      await service.runExpiryJob();
+
+      expect(stellarService.expireAccount).not.toHaveBeenCalled();
+    });
+
     it('processes PENDING_CLAIM accounts too', async () => {
       const account = makeAccount({ status: AccountStatus.PENDING_CLAIM });
       accountsRepo.find.mockResolvedValueOnce([account]);

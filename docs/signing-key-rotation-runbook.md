@@ -13,6 +13,32 @@ This is a checklist for _performing_ a rotation, not for implementing it.
    rotating to.
 3. Take a database snapshot as a rollback point.
 
+## Verify your signing seed matches the on-chain authorized signer
+
+The SweepController was initialized with a single Ed25519 public key as its
+`authorized_signer`, and it verifies every sweep signature against that key. The
+SDK signs with the key derived from `SWEEP_SIGNING_KEY_SEED`. **If those two
+keys differ, every sweep fails signature verification on-chain** — and the
+on-chain error gives no hint that the signing key is the cause.
+
+Derive the public key from the configured seed (do not print the seed itself):
+
+```bash
+S='<64-hex seed>' node -e "const {Keypair}=require('@stellar/stellar-sdk');console.log(Keypair.fromRawEd25519Seed(Buffer.from(process.env.S,'hex')).rawPublicKey().toString('hex'))"
+```
+
+Compare the 64-character hex output against the `authorizedSigner` recorded for
+the network in `bridgelet-core/deployments/<network>.json` under
+`config.authorizedSigner` — for testnet,
+`16ac79d642e33ac696e822cc7175ad7ddd5587a9dd8b6942640cbb832a1ab4bf`. The
+comparison is byte-exact lowercase hex; no prefix conversion is needed.
+
+The check must pass **before** rotation and again after each re-wrap. Note this
+verifies the seed only. A sweep can also fail verification when the signed nonce
+is stale — the SweepController nonce is a single global counter that increments
+after every successful sweep, and the SDK reads it with a `get_nonce`
+simulation immediately before signing.
+
 ## Rotation steps
 
 1. Deploy the new KMS key alongside the existing one (do not delete the old
