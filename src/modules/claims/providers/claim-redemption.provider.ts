@@ -83,10 +83,6 @@ export class ClaimRedemptionProvider {
     }
 
     StellarAddressValidator.assertValid(destinationAddress);
-    await ValidationProvider.assertDestinationExists(
-      destinationAddress,
-      this.configService.get<string>('stellar.horizonUrl'),
-    );
 
     // Atomically acquire the claim slot using SELECT FOR UPDATE.
     // This prevents concurrent requests from both passing the status check.
@@ -185,6 +181,11 @@ export class ClaimRedemptionProvider {
         message: 'Claim was already redeemed',
       };
     }
+
+    await ValidationProvider.assertDestinationExists(
+      destinationAddress,
+      this.configService.get<string>('stellar.horizonUrl'),
+    );
 
     try {
       const sweepResult = await this.sweepsService.executeSweep({
