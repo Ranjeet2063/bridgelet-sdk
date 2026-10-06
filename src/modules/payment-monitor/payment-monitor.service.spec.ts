@@ -22,6 +22,8 @@ const makeAccount = (overrides: Partial<Account> = {}): Account =>
     asset: 'USDC',
     claimTokenHash: null,
     destinationAddress: null,
+    // #812: since #811 this is the account's own EphemeralAccount instance.
+    contractId: 'CACCUNTOWNINSTANCE123456789ABCDEFGHIJKLMNOP',
     expiresAt: new Date(Date.now() + 86_400_000), // expires in 1 day
     createdAt: new Date('2024-01-01T00:00:00.000Z'),
     updatedAt: new Date(),
@@ -239,7 +241,7 @@ describe('PaymentMonitorService', () => {
 
       expect(stellarService.recordPayment).toHaveBeenCalledWith(
         expect.objectContaining({
-          contractId: 'CONTRACT123',
+          contractId: 'CACCUNTOWNINSTANCE123456789ABCDEFGHIJKLMNOP',
           signerSecret: 'SFUNDING_SECRET',
           amount: expect.any(BigInt),
         }),
@@ -248,6 +250,60 @@ describe('PaymentMonitorService', () => {
         { id: 'acc-uuid-1', status: AccountStatus.PENDING_PAYMENT },
         { status: AccountStatus.PENDING_CLAIM },
       );
+    });
+
+    // -----------------------------------------------------------------------
+    // #812: record the payment on the account's own contract instance
+    // -----------------------------------------------------------------------
+
+    it('records the payment against account.contractId, not the shared ID', async () => {
+      const account = makeAccount({
+        id: 'acc-uuid-812',
+        contractId: 'CMYOWNINSTANCE123456789ABCDEFGHIJKLMNOPQ',
+      });
+
+      await service.processPayment(account, makePaymentRecord());
+
+      expect(stellarService.recordPayment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          contractId: 'CMYOWNINSTANCE123456789ABCDEFGHIJKLMNOPQ',
+        }),
+      );
+      expect(stellarService.recordPayment).not.toHaveBeenCalledWith(
+        expect.objectContaining({ contractId: 'CONTRACT123' }),
+      );
+    });
+
+    it('never reads the shared ephemeral-account contract ID from config', async () => {
+      const configService = (
+        service as unknown as { configService: ConfigService }
+      ).configService;
+      const getOrThrow = jest.spyOn(configService, 'getOrThrow');
+
+      await service.processPayment(makeAccount(), makePaymentRecord());
+
+      expect(getOrThrow.mock.calls.map((call) => call[0])).not.toContain(
+        'stellar.contracts.ephemeralAccount',
+      );
+    });
+
+    it('throws a clear error naming the account when contractId is null', async () => {
+      const account = makeAccount({ id: 'acc-uuid-null', contractId: null });
+
+      await expect(
+        service.processPayment(account, makePaymentRecord()),
+      ).rejects.toThrow(/acc-uuid-null/);
+    });
+
+    it('does not record or advance the account when contractId is null', async () => {
+      const account = makeAccount({ id: 'acc-uuid-null', contractId: null });
+
+      await expect(
+        service.processPayment(account, makePaymentRecord()),
+      ).rejects.toThrow(/no EphemeralAccount contract ID/);
+
+      expect(stellarService.recordPayment).not.toHaveBeenCalled();
+      expect(accountsRepo.update).not.toHaveBeenCalled();
     });
 
     it('filters out payments before account.createdAt', async () => {

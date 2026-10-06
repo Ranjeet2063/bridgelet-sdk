@@ -868,4 +868,128 @@ describe('StellarService', () => {
       );
     });
   });
+
+  /**
+   * #812: getSweepNonce — the SweepController nonce read that the sweeper
+   * signs. Previously the signer defaulted the nonce to 0n, which only ever
+   * verified for the first sweep a controller ever executed.
+   */
+  describe('getSweepNonce', () => {
+    it('returns the u64 nonce from the simulation result', async () => {
+      jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
+      sorobanServer.simulateTransaction.mockResolvedValue({
+        result: {
+          retval: StellarSdk.xdr.ScVal.scvU64(
+            StellarSdk.xdr.Uint64.fromString('42'),
+          ),
+        },
+      });
+
+      const nonce = await service.getSweepNonce(CONTRACT_ID);
+
+      expect(nonce).toBe(42n);
+      // Guards the UnsignedHyper wrapper: buildMessage calls
+      // Buffer.writeBigUInt64BE, which throws on a non-bigint.
+      expect(typeof nonce).toBe('bigint');
+    });
+
+    it('returns a bigint for the maximum u64 the counter can reach', async () => {
+      jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
+      sorobanServer.simulateTransaction.mockResolvedValue({
+        result: {
+          retval: StellarSdk.xdr.ScVal.scvU64(
+            StellarSdk.xdr.Uint64.fromString('18446744073709551615'),
+          ),
+        },
+      });
+
+      const nonce = await service.getSweepNonce(CONTRACT_ID);
+
+      expect(nonce).toBe(18446744073709551615n);
+      expect(typeof nonce).toBe('bigint');
+    });
+
+    it('reads it with a read-only simulation: no signing, no transaction', async () => {
+      jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
+      sorobanServer.simulateTransaction.mockResolvedValue({
+        result: {
+          retval: StellarSdk.xdr.ScVal.scvU64(
+            StellarSdk.xdr.Uint64.fromString('1'),
+          ),
+        },
+      });
+
+      await service.getSweepNonce(CONTRACT_ID);
+
+      expect(sorobanServer.simulateTransaction).toHaveBeenCalledTimes(1);
+      expect(sorobanServer.sendTransaction).not.toHaveBeenCalled();
+      expect(sorobanServer.prepareTransaction).not.toHaveBeenCalled();
+    });
+
+    it('calls get_nonce on the SweepController passed in', async () => {
+      jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
+      sorobanServer.simulateTransaction.mockResolvedValue({
+        result: {
+          retval: StellarSdk.xdr.ScVal.scvU64(
+            StellarSdk.xdr.Uint64.fromString('0'),
+          ),
+        },
+      });
+
+      await service.getSweepNonce(CONTRACT_ID);
+
+      const tx = sorobanServer.simulateTransaction.mock
+        .calls[0][0] as StellarSdk.Transaction;
+      const hostFn = tx
+        .toEnvelope()
+        .v1()
+        .tx()
+        .operations()[0]
+        .body()
+        .invokeHostFunctionOp()
+        .hostFunction();
+      expect(hostFn.switch().name).toBe('hostFunctionTypeInvokeContract');
+      const invokeArgs = hostFn.invokeContract();
+      expect(
+        StellarSdk.Address.fromScAddress(
+          invokeArgs.contractAddress(),
+        ).toString(),
+      ).toBe(CONTRACT_ID);
+      expect(Buffer.from(invokeArgs.functionName()).toString()).toBe(
+        'get_nonce',
+      );
+    });
+
+    it('propagates a simulation error instead of returning a stale value', async () => {
+      jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(true);
+
+      sorobanServer.simulateTransaction.mockResolvedValue({
+        error: 'rpc exploded',
+      } as any);
+
+      await expect(service.getSweepNonce(CONTRACT_ID)).rejects.toThrow(
+        'get_nonce simulation failed',
+      );
+    });
+
+    it('throws when the simulation returns no value', async () => {
+      jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
+      sorobanServer.simulateTransaction.mockResolvedValue({ result: {} });
+
+      await expect(service.getSweepNonce(CONTRACT_ID)).rejects.toThrow(
+        'get_nonce returned no value',
+      );
+    });
+
+    it('throws when the returned ScVal is not a u64', async () => {
+      jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
+      sorobanServer.simulateTransaction.mockResolvedValue({
+        result: { retval: StellarSdk.xdr.ScVal.scvU32(3) },
+      });
+
+      await expect(service.getSweepNonce(CONTRACT_ID)).rejects.toThrow(
+        'get_nonce returned unexpected ScVal type',
+      );
+    });
+  });
 });

@@ -55,6 +55,8 @@ describe('ClaimRedemptionProvider', () => {
     expiresAt: new Date(Date.now() + 86_400_000),
     metadata: { userId: 'user-123' },
     destinationAddress: '',
+    // #812: the redemption must hand the sweeper this account's own instance.
+    contractId: 'CREDEMPTIONACCOUNT123456789ABCDEFGHIJKLMNOP',
     claimedAt: null,
   };
 
@@ -232,6 +234,8 @@ describe('ClaimRedemptionProvider', () => {
         destinationAddress: VALID_DESTINATION,
         amount: mockAccount.amount,
         asset: mockAccount.asset,
+        // #812: the account's own EphemeralAccount instance.
+        contractId: mockAccount.contractId,
         // Fresh PENDING_CLAIM attempt -> contract auth must run.
         skipContractAuth: false,
       });
