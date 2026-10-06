@@ -11,6 +11,11 @@ export default registerAs('stellar', () => ({
   recoveryPublic: process.env.RECOVERY_ACCOUNT_PUBLIC,
   contracts: {
     ephemeralAccount: process.env.EPHEMERAL_ACCOUNT_CONTRACT_ID,
+    // #811: the ephemeral-account WASM hash of the uploaded contract. Every
+    // POST /accounts deploys its own contract instance from this hash (see
+    // StellarService.createEphemeralAccount), so a single shared contract ID
+    // can never be initialized twice.
+    ephemeralAccountWasmHash: process.env.EPHEMERAL_ACCOUNT_WASM_HASH,
     sweepController: process.env.SWEEP_CONTROLLER_CONTRACT_ID,
     // #648: version of the deployed ephemeral-account contract. Left
     // undefined when unknown so ContractProvider reports 'unknown' rather
