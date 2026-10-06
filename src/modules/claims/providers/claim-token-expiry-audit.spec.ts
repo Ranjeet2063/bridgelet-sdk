@@ -13,6 +13,7 @@ import { SweepsService } from '../../sweeps/sweeps.service.js';
 import { WebhooksService } from '../../webhooks/webhooks.service.js';
 import { ClaimAuditProvider } from './claim-audit.provider.js';
 import { KmsKeyProvider } from '../../../common/crypto/kms-key.provider.js';
+import { ValidationProvider } from '../../sweeps/providers/validation.provider.js';
 
 const VALID_DESTINATION =
   'GBULQKZ7SA56UKRI6LX2IB6XH3GJW2L34BMTOWMQFJBAQNPSHJJNOTGN';
@@ -140,6 +141,9 @@ describe('Claim token expiry vs. account expiry (audit)', () => {
         ],
       }).compile();
       redemptionProvider = module.get(ClaimRedemptionProvider);
+      jest
+        .spyOn(ValidationProvider, 'assertDestinationExists')
+        .mockResolvedValue(undefined);
     });
 
     it('does not sweep when the claim-slot lookup cannot find a live account', async () => {
