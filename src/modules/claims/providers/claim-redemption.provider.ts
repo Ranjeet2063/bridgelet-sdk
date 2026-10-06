@@ -25,6 +25,7 @@ import { TransactionHashValidator } from '../../../common/validators/transaction
 import { StellarAddressValidator } from '../../../common/validators/stellar-address.validator.js';
 import { WebhooksService } from '../../webhooks/webhooks.service.js';
 import { ClaimAuditProvider } from './claim-audit.provider.js';
+import { ValidationProvider } from '../../sweeps/providers/validation.provider.js';
 
 @Injectable()
 export class ClaimRedemptionProvider {
@@ -82,6 +83,10 @@ export class ClaimRedemptionProvider {
     }
 
     StellarAddressValidator.assertValid(destinationAddress);
+    await ValidationProvider.assertDestinationExists(
+      destinationAddress,
+      this.configService.get<string>('stellar.horizonUrl'),
+    );
 
     // Atomically acquire the claim slot using SELECT FOR UPDATE.
     // This prevents concurrent requests from both passing the status check.

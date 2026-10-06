@@ -144,3 +144,79 @@ describe('isSynchronizeAllowed (#726)', () => {
     }
   });
 });
+
+describe('validateEnv - CLAIM_BASE_URL', () => {
+  const baseValidEnv: NodeJS.ProcessEnv = {
+    DATABASE_HOST: 'localhost',
+    DATABASE_PORT: '5432',
+    DATABASE_NAME: 'bridgelet',
+    DATABASE_USER: 'postgres',
+    DATABASE_PASSWORD: 'password',
+    STELLAR_NETWORK: 'testnet',
+    STELLAR_HORIZON_URL: 'https://horizon-testnet.stellar.org',
+    STELLAR_SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
+    JWT_SECRET: 'test-jwt-secret',
+    ENCRYPTION_KEY: 'a'.repeat(64),
+    EPHEMERAL_ACCOUNT_WASM_HASH: 'b'.repeat(64),
+  };
+
+  it('refuses to start when NODE_ENV=production and CLAIM_BASE_URL is missing', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'production',
+      }),
+    ).toThrow('CLAIM_BASE_URL is missing');
+  });
+
+  it('refuses to start when NODE_ENV=production and CLAIM_BASE_URL has a trailing slash', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'production',
+        CLAIM_BASE_URL: 'https://claim.bridgelet.io/',
+      }),
+    ).toThrow('CLAIM_BASE_URL must not have a trailing slash');
+  });
+
+  it('refuses to start when NODE_ENV=production and CLAIM_BASE_URL is not http/https', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'production',
+        CLAIM_BASE_URL: 'ftp://claim.bridgelet.io',
+      }),
+    ).toThrow('CLAIM_BASE_URL must be a valid http or https URL');
+  });
+
+  it('succeeds when NODE_ENV=production and CLAIM_BASE_URL is a valid URL without trailing slash', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'production',
+        CLAIM_BASE_URL: 'https://claim.bridgelet.io',
+      }),
+    ).not.toThrow();
+  });
+
+  it('starts normally without CLAIM_BASE_URL when NODE_ENV is development or test', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'development',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'test',
+      }),
+    ).not.toThrow();
+  });
+});

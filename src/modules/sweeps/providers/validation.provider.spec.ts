@@ -4,7 +4,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { Account } from '../../accounts/entities/account.entity.js';
 import { ValidationProvider } from './validation.provider.js';
-import { StrKey } from '@stellar/stellar-sdk';
+import { StrKey, Horizon, NotFoundError } from '@stellar/stellar-sdk';
 import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
 
 const mockAccount = (overrides: Partial<Account> = {}): Account =>
@@ -357,6 +357,72 @@ describe('ValidationProvider', () => {
           asset: 'TOOLONGCODE1X:GABC',
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('assertDestinationExists', () => {
+    const destination = 'GD5J6HLF5666X4AZLTFTXGKWDBSUXSWXP6P5F20O1337';
+
+    it('should resolve when account exists on Horizon', async () => {
+      const mockServer = {
+        loadAccount: jest.fn().mockResolvedValue({ id: destination }),
+      } as unknown as Horizon.Server;
+
+      await expect(
+        provider.assertDestinationExists(destination, mockServer),
+      ).resolves.toBeUndefined();
+      expect(mockServer.loadAccount).toHaveBeenCalledWith(destination);
+    });
+
+    it('should throw BadRequestException with DESTINATION_NOT_FUNDED on NotFoundError', async () => {
+      const notFoundErr = new NotFoundError('Not Found', { status: 404 });
+      const mockServer = {
+        loadAccount: jest.fn().mockRejectedValue(notFoundErr),
+      } as unknown as Horizon.Server;
+
+      let caughtError: unknown;
+      try {
+        await provider.assertDestinationExists(destination, mockServer);
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(BadRequestException);
+      const res = (caughtError as BadRequestException).getResponse() as Record<
+        string,
+        unknown
+      >;
+      expect(res.code).toBe('DESTINATION_NOT_FUNDED');
+    });
+
+    it('should throw BadRequestException with DESTINATION_NOT_FUNDED when error response status is 404', async () => {
+      const err = { response: { status: 404 } };
+      const mockServer = {
+        loadAccount: jest.fn().mockRejectedValue(err),
+      } as unknown as Horizon.Server;
+
+      await expect(
+        ValidationProvider.assertDestinationExists(destination, mockServer),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should rethrow network errors without producing DESTINATION_NOT_FUNDED', async () => {
+      const networkError = new Error(
+        'getaddrinfo ENOTFOUND horizon-testnet.stellar.org',
+      );
+      const mockServer = {
+        loadAccount: jest.fn().mockRejectedValue(networkError),
+      } as unknown as Horizon.Server;
+
+      let caughtError: unknown;
+      try {
+        await provider.assertDestinationExists(destination, mockServer);
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBe(networkError);
+      expect(caughtError).not.toBeInstanceOf(BadRequestException);
     });
   });
 });

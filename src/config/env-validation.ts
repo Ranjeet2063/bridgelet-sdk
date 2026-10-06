@@ -47,6 +47,27 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): void {
     }
   }
 
+  if (env.NODE_ENV === 'production') {
+    const claimBaseUrl = env.CLAIM_BASE_URL;
+    if (!claimBaseUrl || claimBaseUrl.trim() === '') {
+      errors.push('CLAIM_BASE_URL is missing');
+    } else {
+      const trimmed = claimBaseUrl.trim();
+      if (trimmed.endsWith('/')) {
+        errors.push('CLAIM_BASE_URL must not have a trailing slash');
+      } else {
+        try {
+          const parsed = new URL(trimmed);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            errors.push('CLAIM_BASE_URL must be a valid http or https URL');
+          }
+        } catch {
+          errors.push('CLAIM_BASE_URL must be a valid http or https URL');
+        }
+      }
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(
       `Invalid environment configuration:\n- ${errors.join('\n- ')}`,

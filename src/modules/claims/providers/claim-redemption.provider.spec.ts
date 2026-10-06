@@ -12,6 +12,7 @@ import { SecretEncryptionUtil } from '../../../common/crypto/secret-encryption.u
 import { WebhooksService } from '../../webhooks/webhooks.service.js';
 import { ClaimAuditProvider } from './claim-audit.provider.js';
 import { KmsKeyProvider } from '../../../common/crypto/kms-key.provider.js';
+import { ValidationProvider } from '../../sweeps/providers/validation.provider.js';
 
 describe('ClaimRedemptionProvider', () => {
   let provider: ClaimRedemptionProvider;
@@ -182,6 +183,9 @@ describe('ClaimRedemptionProvider', () => {
     mockSweepsService.executeSweep.mockResolvedValue(mockSweepResult);
     mockClaimsRepository.findOne.mockResolvedValue({ ...mockClaim });
     mockWebhooksService.triggerEvent.mockResolvedValue(undefined);
+    jest
+      .spyOn(ValidationProvider, 'assertDestinationExists')
+      .mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -715,6 +719,60 @@ describe('ClaimRedemptionProvider', () => {
         mockAccount.id,
         expect.objectContaining({ status: AccountStatus.PENDING_CLAIM }),
       );
+    });
+  });
+
+  describe('redeemClaim - unfunded destination pre-check', () => {
+    it('rejects unfunded destination with DESTINATION_NOT_FUNDED before DB lock and makes no contract call', async () => {
+      const ds = makeHappyPathDataSource();
+      const p = await buildModule(ds);
+
+      jest
+        .spyOn(ValidationProvider, 'assertDestinationExists')
+        .mockRejectedValueOnce(
+          new BadRequestException({
+            statusCode: 400,
+            error: 'DESTINATION_NOT_FUNDED',
+            code: 'DESTINATION_NOT_FUNDED',
+            message:
+              'Destination address does not exist on Stellar network and is not funded',
+          }),
+        );
+
+      let caughtError: unknown;
+      try {
+        await p.redeemClaim(VALID_TOKEN, VALID_DESTINATION);
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(BadRequestException);
+      expect((caughtError as BadRequestException).getResponse()).toEqual(
+        expect.objectContaining({ code: 'DESTINATION_NOT_FUNDED' }),
+      );
+
+      // Leaves account in PENDING_CLAIM and acquires no DB transaction lock
+      expect(ds.transaction).not.toHaveBeenCalled();
+      // Makes no contract call
+      expect(mockSweepsService.executeSweep).not.toHaveBeenCalled();
+    });
+
+    it('propagates Horizon network errors without converting to not funded error', async () => {
+      const ds = makeHappyPathDataSource();
+      const p = await buildModule(ds);
+
+      const networkErr = new Error('Stellar Horizon connection timeout');
+      jest
+        .spyOn(ValidationProvider, 'assertDestinationExists')
+        .mockRejectedValueOnce(networkErr);
+
+      await expect(
+        p.redeemClaim(VALID_TOKEN, VALID_DESTINATION),
+      ).rejects.toThrow('Stellar Horizon connection timeout');
+
+      // Leaves account in PENDING_CLAIM without acquiring DB lock
+      expect(ds.transaction).not.toHaveBeenCalled();
+      expect(mockSweepsService.executeSweep).not.toHaveBeenCalled();
     });
   });
 });

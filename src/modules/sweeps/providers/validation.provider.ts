@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
+import { Horizon, NotFoundError } from '@stellar/stellar-sdk';
 import { Account } from '../../accounts/entities/account.entity.js';
 import type { SweepExecutionRequest } from '../interfaces/execute-sweep.interface.js';
 import { AccountStatus } from '../../accounts/enums/account-status.enum.js';
@@ -19,6 +20,85 @@ export class ValidationProvider {
     @InjectRepository(Account)
     private readonly accountRepository: Repository<Account>,
   ) {}
+
+  /**
+   * Asserts that a destination address exists on the Stellar network (Horizon).
+   * Throws BadRequestException (DESTINATION_NOT_FUNDED) if the account does not exist (404).
+   * Transient network errors are rethrown so they are not treated as "not funded".
+   *
+   * @param destinationAddress The Stellar public address to check.
+   * @param horizonServerOrUrl Optional Horizon.Server instance or Horizon URL string.
+   */
+  public async assertDestinationExists(
+    destinationAddress: string,
+    horizonServerOrUrl?:
+      | { loadAccount: (id: string) => Promise<unknown> }
+      | string,
+  ): Promise<void> {
+    return ValidationProvider.assertDestinationExists(
+      destinationAddress,
+      horizonServerOrUrl,
+    );
+  }
+
+  public static async assertDestinationExists(
+    destinationAddress: string,
+    horizonServerOrUrl?:
+      | { loadAccount: (id: string) => Promise<unknown> }
+      | string,
+  ): Promise<void> {
+    let server: { loadAccount: (id: string) => Promise<unknown> };
+    if (
+      horizonServerOrUrl &&
+      typeof horizonServerOrUrl === 'object' &&
+      'loadAccount' in horizonServerOrUrl &&
+      typeof horizonServerOrUrl.loadAccount === 'function'
+    ) {
+      server = horizonServerOrUrl;
+    } else if (
+      typeof horizonServerOrUrl === 'string' &&
+      horizonServerOrUrl.trim() !== ''
+    ) {
+      server = new Horizon.Server(horizonServerOrUrl);
+    } else {
+      const url =
+        process.env.STELLAR_HORIZON_URL ||
+        'https://horizon-testnet.stellar.org';
+      server = new Horizon.Server(url);
+    }
+
+    try {
+      await server.loadAccount(destinationAddress);
+    } catch (error: unknown) {
+      let isNotFound = false;
+      if (error instanceof NotFoundError) {
+        isNotFound = true;
+      } else if (error && typeof error === 'object') {
+        const errObj = error as {
+          name?: string;
+          status?: number;
+          response?: { status?: number };
+        };
+        isNotFound =
+          errObj.name === 'NotFoundError' ||
+          errObj.status === 404 ||
+          errObj.response?.status === 404;
+      }
+
+      if (isNotFound) {
+        throw new BadRequestException({
+          statusCode: 400,
+          error: 'DESTINATION_NOT_FUNDED',
+          code: 'DESTINATION_NOT_FUNDED',
+          message:
+            'Destination address does not exist on Stellar network and is not funded',
+        });
+      }
+
+      // Treat network/transient errors as transient; do not report as "not funded"
+      throw error;
+    }
+  }
 
   /**
    * Validate all sweep parameters before execution
