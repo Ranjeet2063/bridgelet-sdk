@@ -52,6 +52,7 @@ import { TokenVerificationProvider } from '../src/modules/claims/providers/token
 import { SecretEncryptionUtil } from '../src/common/crypto/secret-encryption.util.js';
 import { SchedulerService } from '../src/modules/scheduler/scheduler.service.js';
 import { PaymentMonitorService } from '../src/modules/payment-monitor/payment-monitor.service.js';
+import { ValidationProvider } from '../src/modules/sweeps/providers/validation.provider.js';
 
 const MOCK_TX_HASH = 'a'.repeat(64);
 const MOCK_SWEEP_RESULT = { txHash: MOCK_TX_HASH, success: true };
@@ -178,6 +179,9 @@ describe('Claim lifecycle (e2e) [issue #171]', () => {
       })
       .compile();
 
+    jest
+      .spyOn(ValidationProvider, 'assertDestinationExists')
+      .mockResolvedValue(undefined);
     jest
       .spyOn(SecretEncryptionUtil, 'decrypt')
       .mockReturnValue('test-secret-decrypted');
@@ -423,6 +427,9 @@ describe('Expired claim token (e2e) [issue #674]', () => {
       // NOTE: TokenVerificationProvider is intentionally NOT overridden here.
       .compile();
 
+    jest
+      .spyOn(ValidationProvider, 'assertDestinationExists')
+      .mockResolvedValue(undefined);
     app = moduleFixture.createNestApplication();
     await app.init();
     ds = app.get(DataSource);
@@ -433,6 +440,7 @@ describe('Expired claim token (e2e) [issue #674]', () => {
       await app.close();
       app = null;
     }
+    jest.restoreAllMocks();
     await stopPostgres();
   });
 
